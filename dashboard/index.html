@@ -74,6 +74,11 @@
   details.top > summary { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 650; }
   main.panel-hidden { grid-template-columns: minmax(0, 1fr); }
   main.panel-hidden #splitter, main.panel-hidden aside { display: none; }
+  .ctl { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .ctl .buttons { display: flex; gap: 5px; }
+  .ctl button, .appctl button { padding: 3px 9px; font-size: 12.5px; }
+  .appctl { display: flex; gap: 5px; margin: 10px 0 0; align-items: center; flex-wrap: wrap; }
+  #control-msg { color: var(--muted); font-size: 12.5px; min-height: 18px; margin: 2px 0 0; }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
@@ -118,6 +123,12 @@
   </div>
   <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize the details panel" tabindex="0" title="Drag to resize. Double-click to reset."></div>
   <aside id="side-panel">
+    <h2>Controls</h2>
+    <div class="ctl"><span>Mule runtime <span class="pill unknown" id="runtime-pill">Checking</span></span>
+      <span class="buttons"><button data-control="runtime/start">Start</button><button data-control="runtime/stop">Stop</button><button data-control="runtime/restart">Restart</button></span></div>
+    <div class="ctl"><span>Docker systems <span class="pill unknown" id="docker-pill">Checking</span></span>
+      <span class="buttons"><button data-control="docker/start">Start</button><button data-control="docker/stop">Stop</button><button data-control="docker/restart">Restart</button></span></div>
+    <p id="control-msg" role="status"></p>
     <h2>Selected component or connection</h2>
     <div id="detail" class="empty">Click a component or a connection line on the canvas.</div>
     <details class="section top" id="activity-section"><summary>Activity this session <span class="n" id="activity-count">(0)</span></summary>
@@ -288,6 +299,14 @@ function render() {
   document.getElementById('stamp').textContent = 'Updated ' + new Date(state.at).toLocaleTimeString();
   renderDetail(info, byId, issues);
   renderRuns();
+  const running = ['finance', 'sfdc', 'prc'].filter((k) => state.apis[k].reachable).length;
+  const rt = document.getElementById('runtime-pill');
+  rt.className = 'pill ' + (running === 3 ? 'up' : running ? 'unknown' : 'down');
+  rt.textContent = running === 3 ? 'Running' : running ? `${running} of 3 apps up` : 'Stopped';
+  const cs = state.containers ? Object.values(state.containers) : null, dk = document.getElementById('docker-pill');
+  const dUp = cs ? cs.filter((c) => c.up).length : 0;
+  dk.className = 'pill ' + (!cs ? 'unknown' : dUp === 2 ? 'up' : dUp ? 'unknown' : 'down');
+  dk.textContent = !cs ? 'Unknown' : dUp === 2 ? 'Running' : dUp ? `${dUp} of 2 up` : 'Stopped';
   const prcUp = state.apis.prc.up;
   document.querySelectorAll('button[data-action]').forEach((b) => {
     if (!b.classList.contains('busy')) { b.disabled = !prcUp; b.title = prcUp ? b.dataset.tip || b.title : 'The process API is not running'; }
@@ -342,6 +361,7 @@ function renderDetail(info, byId, issues) {
       `<dl class="kv">${d.facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` +
       (d.link ? `<p style="margin:10px 0 0"><a href="${esc(d.link)}" target="_blank" rel="noopener">${esc(d.linkText)}</a></p>` : '');
     if (LOG_COMPONENTS[selected.id]) {
+      html += `<div class="appctl"><span style="color:var(--muted)">This app:</span><button data-control="${selected.id}/start">Start</button><button data-control="${selected.id}/stop">Stop</button><button data-control="${selected.id}/restart">Restart</button></div>`;
       const own = issues.components[selected.id] || [];
       html += `<details class="section" data-k="issues"><summary>Errors and rejected requests <span class="n">(${own.length})</span></summary>` + issueList(own, 'None found in this app’s log.') + `</details>`;
       if (selected.id === 'prc') {
@@ -403,6 +423,22 @@ document.querySelectorAll('button[data-action]').forEach((button) => {
     button.classList.remove('busy'); button.textContent = label;
     await refresh();
   });
+});
+
+// Start, stop and restart buttons (runtime, Docker systems, or one app).
+const CONTROL_NAMES = { runtime: 'Mule runtime', docker: 'Docker systems', finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api' };
+document.addEventListener('click', async (e) => {
+  const button = e.target.closest('button[data-control]');
+  if (!button || button.disabled) return;
+  const [target, operation] = button.dataset.control.split('/'), msg = document.getElementById('control-msg');
+  button.disabled = true;
+  msg.textContent = `${CONTROL_NAMES[target]}: ${operation} requested…`;
+  try {
+    const result = await (await fetch('/api/control/' + button.dataset.control, { method: 'POST' })).json();
+    msg.textContent = result.message || (result.ok ? 'Done.' : 'Failed.');
+  } catch (error) { msg.textContent = 'The dashboard server did not respond.'; }
+  button.disabled = false;
+  setTimeout(refresh, 1500);
 });
 
 // Select a component or a connection by click or keyboard.

@@ -133,11 +133,12 @@ each side, the connections between them, and recent errors. It also has a
 button for each flow.
 
 ```powershell
-node dashboard\server.js        # then open http://localhost:8090
+.\scripts\start-dashboard.ps1     # starts it in its own window and opens http://localhost:8090
 ```
 
 - Click a component or a connection line for details, errors and rejected requests.
-- The buttons call the process API: migrate customers, sync invoices, reconcile, process a sample payments file.
+- The flow buttons call the process API: migrate customers, sync invoices, reconcile, process a sample payments file.
+- **Controls** start, stop and restart the Mule runtime, a single app, or the Docker systems. Starting the runtime opens a minimised window; closing that window stops it.
 - Errors come from the Mule apps' JSON log files. Record counts for Salesforce come from the Salesforce CLI (org alias `poc`, or set `SF_ORG_ALIAS`).
 
 It needs Node 18 or later and no packages. It listens on localhost only, because

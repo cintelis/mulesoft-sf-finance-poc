@@ -273,6 +273,103 @@ const ACTIONS = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Controls: start, stop and restart the Mule runtime, one app, or the Docker
+// systems. Windows only for the runtime, because it uses the PowerShell start
+// script. Everything here acts on this machine alone.
+// ---------------------------------------------------------------------------
+const { spawn } = require('child_process');
+const APP_FOLDERS = { finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api' };
+
+function runtimeDir() {
+  const logs = findLogDir();
+  return logs ? path.dirname(logs) : null;
+}
+
+function powershell(command, timeout = 60000) {
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+      { timeout, windowsHide: true }, (error, stdout, stderr) => resolve({ ok: !error, output: (stdout || stderr || '').trim() }));
+  });
+}
+
+const STOP_RUNTIME = "Get-CimInstance Win32_Process -Filter \"Name='java.exe' OR Name='wrapper-windows-x86-64.exe'\" | " +
+  "Where-Object { $_.CommandLine -match 'mule-enterprise-standalone' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -Confirm:$false; $_.ProcessId }";
+
+async function stopRuntime() {
+  const result = await powershell(STOP_RUNTIME);
+  return { ok: result.ok, message: result.output ? 'Mule runtime stopped.' : 'Mule runtime was not running.' };
+}
+
+function startRuntime() {
+  if (process.platform !== 'win32') return { ok: false, message: 'Starting the runtime from the dashboard is only set up for Windows.' };
+  const script = path.join(REPO, 'scripts', 'start-local-runtime.ps1');
+  // "start" gives the runtime its own minimised console window. It keeps
+  // running if the dashboard server is closed; closing that window stops it.
+  const child = spawn('cmd.exe', ['/c', 'start', 'Mule runtime (finance POC)', '/min',
+    'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+    { detached: true, stdio: 'ignore', windowsHide: false });
+  child.unref();
+  return { ok: true, message: 'Mule runtime starting in a minimised window. The apps take about a minute to come up.' };
+}
+
+// The runtime watches its apps folder: a new jar is deployed, and removing an
+// app's anchor file undeploys it cleanly.
+function appFiles(id) {
+  const dir = runtimeDir(), name = APP_FOLDERS[id];
+  if (!dir || !name) return null;
+  let built = null;
+  try {
+    const target = path.join(REPO, name, 'target');
+    const jar = fs.readdirSync(target).find((f) => f.endsWith('-mule-application.jar'));
+    built = jar ? path.join(target, jar) : null;
+  } catch { /* not built */ }
+  return { name, built, deployed: path.join(dir, 'apps', `${name}.jar`), anchor: path.join(dir, 'apps', `${name}-anchor.txt`) };
+}
+
+function stopApp(id) {
+  const files = appFiles(id);
+  if (!files) return { ok: false, message: 'Unknown app, or no Mule runtime found.' };
+  if (!fs.existsSync(files.anchor)) return { ok: true, message: `${files.name} was not deployed.` };
+  fs.unlinkSync(files.anchor);
+  return { ok: true, message: `${files.name} stopping.` };
+}
+
+function startApp(id) {
+  const files = appFiles(id);
+  if (!files) return { ok: false, message: 'Unknown app, or no Mule runtime found.' };
+  if (!files.built) return { ok: false, message: `${files.name} has not been built. Run mvn clean package -DskipMunitTests in its folder.` };
+  fs.copyFileSync(files.built, files.deployed);
+  return { ok: true, message: `${files.name} deploying. It takes about 20 seconds.` };
+}
+
+async function docker(args) {
+  const out = await run('docker', ['compose', '-f', `"${path.join(REPO, 'infra', 'docker-compose.yml')}"`, ...args], 120000);
+  if (cache.containers) cache.containers.at = 0;
+  return { ok: out !== null, message: out !== null ? `Docker systems: ${args[0]} done.` : 'Docker command failed. Is Docker Desktop running?' };
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const CONTROLS = {
+  runtime: {
+    start: async () => startRuntime(),
+    stop: stopRuntime,
+    restart: async () => { await stopRuntime(); await wait(3000); return startRuntime(); },
+  },
+  docker: {
+    start: () => docker(['start']),
+    stop: () => docker(['stop']),
+    restart: () => docker(['restart']),
+  },
+};
+for (const id of Object.keys(APP_FOLDERS)) {
+  CONTROLS[id] = {
+    start: async () => startApp(id),
+    stop: async () => stopApp(id),
+    restart: async () => { stopApp(id); await wait(6000); return startApp(id); },
+  };
+}
+
 function send(res, status, body, type = 'application/json') {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -304,6 +401,11 @@ const server = http.createServer(async (req, res) => {
       // Refresh the Salesforce counts straight after an action changes them.
       if (cache.salesforce) cache.salesforce.at = 0;
       return send(res, 200, { action: action[1], ms: Date.now() - started, ...result });
+    }
+    const control = url.pathname.match(/^\/api\/control\/([a-z]+)\/(start|stop|restart)$/);
+    if (req.method === 'POST' && control && CONTROLS[control[1]]) {
+      const result = await CONTROLS[control[1]][control[2]]();
+      return send(res, 200, { target: control[1], operation: control[2], ...result });
     }
     send(res, 404, { error: 'Not found' });
   } catch (error) {
