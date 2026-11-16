@@ -1,0 +1,13 @@
+# Local development against infra/docker-compose.yml.
+# The password comes from the FINANCE_DB_PASSWORD environment variable (the value
+# in infra/.env). Real environments
+# will use encrypted secure properties (added in the security step).
+http:
+  port: "8081"
+
+db:
+  host: "localhost"
+  port: "1521"
+  serviceName: "FREEPDB1"
+  user: "finance"
+  password: "${FINANCE_DB_PASSWORD}"

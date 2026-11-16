@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- GET /health -->
+  <flow name="get:\health:finance-sys-api-config" doc:name="Health">
+    <try doc:name="Try database">
+      <db:select config-ref="finance-db-config" doc:name="Ping database">
+        <db:sql>SELECT 1 AS ok FROM dual</db:sql>
+      </db:select>
+      <set-payload value="#[output application/json --- { status: 'UP', database: 'UP' }]" doc:name="Up"/>
+      <error-handler>
+        <on-error-continue type="ANY" logException="false" doc:name="Database down">
+          <logger level="WARN" category="finance-sys-api" doc:name="Log down"
+                  message="#['health check failed: ' ++ (error.description default '')]"/>
+          <set-variable variableName="httpStatus" value="#[503]" doc:name="503"/>
+          <set-payload value="#[output application/json --- { status: 'DOWN', database: 'DOWN' }]" doc:name="Down"/>
+        </on-error-continue>
+      </error-handler>
+    </try>
+  </flow>
+
+  <!-- GET /recon/customers -->
+  <flow name="get:\recon\customers:finance-sys-api-config" doc:name="Customer reconciliation hashes">
+    <db:select config-ref="finance-db-config" doc:name="Select recon hashes">
+      <db:sql>SELECT sf_account_id, customer_code, row_hash FROM v_customer_recon ORDER BY sf_account_id</db:sql>
+    </db:select>
+    <ee:transform doc:name="Map recon report">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var rows = payload default []
+---
+{
+  count: sizeOf(rows),
+  items: rows map (row) -> {
+    sfAccountId: row.SF_ACCOUNT_ID,
+    customerCode: row.CUSTOMER_CODE,
+    rowHash: row.ROW_HASH
+  }
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+  </flow>
+
+  <!-- GET /watermarks/{syncName} -->
+  <flow name="get:\watermarks\(syncName):finance-sys-api-config" doc:name="Get watermark">
+    <set-variable variableName="syncName" value="#[attributes.uriParams.syncName]" doc:name="Read sync name"/>
+    <db:select config-ref="finance-db-config" doc:name="Select watermark">
+      <db:sql><![CDATA[
+        SELECT sync_name, TO_CHAR(last_value, 'YYYY-MM-DD"T"HH24:MI:SS.FF6') AS last_value
+          FROM sync_watermark
+         WHERE sync_name = :syncName
+      ]]></db:sql>
+      <db:input-parameters>#[{ syncName: vars.syncName }]</db:input-parameters>
+    </db:select>
+    <choice doc:name="Found?">
+      <when expression="#[isEmpty(payload)]">
+        <raise-error type="APP:NOT_FOUND" doc:name="No watermark"
+                     description="#['No watermark named ' ++ vars.syncName]"/>
+      </when>
+    </choice>
+    <set-payload value="#[output application/json --- { syncName: payload[0].SYNC_NAME, value: payload[0].LAST_VALUE }]" doc:name="Map watermark"/>
+  </flow>
+
+  <!-- PUT /watermarks/{syncName} -->
+  <flow name="put:\watermarks\(syncName):application\json:finance-sys-api-config" doc:name="Set watermark">
+    <set-variable variableName="watermark" doc:name="Read watermark"
+                  value="#[{ syncName: attributes.uriParams.syncName, value: payload.value }]"/>
+    <db:update config-ref="finance-db-config" doc:name="Merge watermark">
+      <db:sql><![CDATA[
+        MERGE INTO sync_watermark w
+        USING (SELECT :syncName AS sync_name,
+                      TO_TIMESTAMP(:value, 'YYYY-MM-DD"T"HH24:MI:SS.FF6') AS last_value
+                 FROM dual) s
+           ON (w.sync_name = s.sync_name)
+         WHEN MATCHED THEN
+           UPDATE SET w.last_value = s.last_value, w.updated_at = SYSTIMESTAMP
+         WHEN NOT MATCHED THEN
+           INSERT (sync_name, last_value) VALUES (s.sync_name, s.last_value)
+      ]]></db:sql>
+      <db:input-parameters>#[vars.watermark]</db:input-parameters>
+    </db:update>
+    <set-payload value="#[output application/json --- vars.watermark]" doc:name="Echo watermark"/>
+  </flow>
+</mule>

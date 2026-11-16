@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- GET /invoices?modifiedSince=&limit= : watermark read for the invoice sync.
+       WITH TIES keeps rows that share a timestamp on the same page, so the
+       caller's next watermark can never skip a row. -->
+  <flow name="get:\invoices:finance-sys-api-config" doc:name="List changed invoices">
+    <set-variable variableName="modifiedSince" doc:name="Read watermark"
+                  value="#[attributes.queryParams.modifiedSince default '2000-01-01T00:00:00.000000']"/>
+    <set-variable variableName="limit" doc:name="Read limit"
+                  value="#[(attributes.queryParams.limit default 200) as Number]"/>
+    <db:select config-ref="finance-db-config" doc:name="Select changed invoices">
+      <db:sql><![CDATA[
+        SELECT i.invoice_number, c.customer_code, c.sf_account_id,
+               TO_CHAR(i.invoice_date, 'YYYY-MM-DD') AS invoice_date,
+               TO_CHAR(i.due_date, 'YYYY-MM-DD')     AS due_date,
+               i.amount_ex_gst, i.gst_amount, i.total_amount, i.amount_paid,
+               i.currency_code, i.status, i.description,
+               TO_CHAR(i.last_modified, 'YYYY-MM-DD"T"HH24:MI:SS.FF6') AS last_modified
+          FROM invoices i
+          JOIN customers c ON c.customer_id = i.customer_id
+         WHERE i.last_modified > TO_TIMESTAMP(:modifiedSince, 'YYYY-MM-DD"T"HH24:MI:SS.FF6')
+         ORDER BY i.last_modified
+         FETCH FIRST :limit ROWS WITH TIES
+      ]]></db:sql>
+      <db:input-parameters>#[{ modifiedSince: vars.modifiedSince, limit: vars.limit }]</db:input-parameters>
+    </db:select>
+    <ee:transform doc:name="Map invoices">
+      <ee:message>
+        <ee:set-payload resource="dw/invoices-response.dwl"/>
+      </ee:message>
+    </ee:transform>
+    <logger level="INFO" category="finance-sys-api" doc:name="Log page"
+            message="#['invoices since=' ++ vars.modifiedSince ++ ' returned=' ++ (payload.count as String)]"/>
+  </flow>
+
+  <!-- POST /payments : apply one payment. Business rule failures come back from
+       the procedure as ORA-20002 / ORA-20003 and are mapped by the error handler. -->
+  <flow name="post:\payments:application\json:finance-sys-api-config" doc:name="Apply payment">
+    <ee:transform doc:name="Map to procedure parameters">
+      <ee:variables>
+        <ee:set-variable variableName="params" resource="dw/payment-params.dwl"/>
+      </ee:variables>
+    </ee:transform>
+    <db:stored-procedure config-ref="finance-db-config" doc:name="Call apply_payment">
+      <db:sql><![CDATA[{ call apply_payment(
+        :p_payment_ref, :p_invoice_number, :p_amount, :p_currency_code, :p_payment_date,
+        :p_payment_method, :p_payer_name, :p_source_file, :p_result, :p_invoice_status) }]]></db:sql>
+      <db:parameter-types>
+        <db:parameter-type key="p_payment_ref" type="VARCHAR"/>
+        <db:parameter-type key="p_invoice_number" type="VARCHAR"/>
+        <db:parameter-type key="p_amount" type="NUMERIC"/>
+        <db:parameter-type key="p_currency_code" type="VARCHAR"/>
+        <db:parameter-type key="p_payment_date" type="DATE"/>
+        <db:parameter-type key="p_payment_method" type="VARCHAR"/>
+        <db:parameter-type key="p_payer_name" type="VARCHAR"/>
+        <db:parameter-type key="p_source_file" type="VARCHAR"/>
+      </db:parameter-types>
+      <db:input-parameters>#[vars.params]</db:input-parameters>
+      <db:output-parameters>
+        <db:output-parameter key="p_result" type="VARCHAR"/>
+        <db:output-parameter key="p_invoice_status" type="VARCHAR"/>
+      </db:output-parameters>
+    </db:stored-procedure>
+    <set-variable variableName="httpStatus" value="#[if (payload.p_result == 'APPLIED') 201 else 200]" doc:name="201 when applied"/>
+    <ee:transform doc:name="Map payment result">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  paymentRef: vars.params.p_payment_ref,
+  invoiceNumber: vars.params.p_invoice_number,
+  result: payload.p_result,
+  invoiceStatus: payload.p_invoice_status
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+    <logger level="INFO" category="finance-sys-api" doc:name="Log payment"
+            message="#['payment ref=' ++ payload.paymentRef ++ ' invoice=' ++ payload.invoiceNumber ++ ' result=' ++ payload.result]"/>
+  </flow>
+</mule>

@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- GET /customers?linked=true|false -->
+  <flow name="get:\customers:finance-sys-api-config" doc:name="List customers">
+    <set-variable variableName="linked" value="#[(attributes.queryParams.linked default 'any') as String]" doc:name="Read linked filter"/>
+    <db:select config-ref="finance-db-config" doc:name="Select customers">
+      <db:sql><![CDATA[
+        SELECT customer_id, customer_code, sf_account_id, customer_name, abn, email, phone,
+               address_line, suburb, state_code, postcode, country_code, status, credit_limit,
+               TO_CHAR(last_modified, 'YYYY-MM-DD"T"HH24:MI:SS.FF6') AS last_modified
+          FROM customers
+         WHERE :linked = 'any'
+            OR (:linked = 'true'  AND sf_account_id IS NOT NULL)
+            OR (:linked = 'false' AND sf_account_id IS NULL)
+         ORDER BY customer_code
+      ]]></db:sql>
+      <db:input-parameters>#[{ linked: vars.linked }]</db:input-parameters>
+    </db:select>
+    <ee:transform doc:name="Map customers">
+      <ee:message>
+        <ee:set-payload resource="dw/customers-response.dwl"/>
+      </ee:message>
+    </ee:transform>
+  </flow>
+
+  <!-- PUT /customers/{sfAccountId} : idempotent upsert via the stored procedure -->
+  <flow name="put:\customers\(sfAccountId):application\json:finance-sys-api-config" doc:name="Upsert customer">
+    <set-variable variableName="sfAccountId" value="#[attributes.uriParams.sfAccountId]" doc:name="Read Salesforce ID"/>
+    <ee:transform doc:name="Map to procedure parameters">
+      <ee:variables>
+        <ee:set-variable variableName="params" resource="dw/customer-upsert-params.dwl"/>
+      </ee:variables>
+    </ee:transform>
+    <db:stored-procedure config-ref="finance-db-config" doc:name="Call upsert_customer">
+      <db:sql><![CDATA[{ call upsert_customer(
+        :p_sf_account_id, :p_customer_name, :p_abn, :p_email, :p_phone, :p_address_line,
+        :p_suburb, :p_state_code, :p_postcode, :p_status, :p_credit_limit,
+        :p_customer_id, :p_action) }]]></db:sql>
+      <db:parameter-types>
+        <db:parameter-type key="p_sf_account_id" type="VARCHAR"/>
+        <db:parameter-type key="p_customer_name" type="VARCHAR"/>
+        <db:parameter-type key="p_abn" type="VARCHAR"/>
+        <db:parameter-type key="p_email" type="VARCHAR"/>
+        <db:parameter-type key="p_phone" type="VARCHAR"/>
+        <db:parameter-type key="p_address_line" type="VARCHAR"/>
+        <db:parameter-type key="p_suburb" type="VARCHAR"/>
+        <db:parameter-type key="p_state_code" type="VARCHAR"/>
+        <db:parameter-type key="p_postcode" type="VARCHAR"/>
+        <db:parameter-type key="p_status" type="VARCHAR"/>
+        <db:parameter-type key="p_credit_limit" type="NUMERIC"/>
+      </db:parameter-types>
+      <db:input-parameters>#[vars.params]</db:input-parameters>
+      <db:output-parameters>
+        <db:output-parameter key="p_customer_id" type="NUMERIC"/>
+        <db:output-parameter key="p_action" type="VARCHAR"/>
+      </db:output-parameters>
+    </db:stored-procedure>
+    <set-variable variableName="httpStatus" value="#[if (payload.p_action == 'INSERTED') 201 else 200]" doc:name="201 when created"/>
+    <ee:transform doc:name="Map upsert result">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  customerId: payload.p_customer_id as Number,
+  sfAccountId: vars.sfAccountId,
+  action: payload.p_action
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+    <logger level="INFO" category="finance-sys-api" doc:name="Log upsert"
+            message="#['customer upsert sfAccountId=' ++ vars.sfAccountId ++ ' action=' ++ payload.action]"/>
+  </flow>
+
+  <!-- PUT /customer-links/{customerCode} : link a legacy customer to its new Salesforce Account -->
+  <flow name="put:\customer-links\(customerCode):application\json:finance-sys-api-config" doc:name="Link customer">
+    <set-variable variableName="link" doc:name="Read link"
+                  value="#[{ customerCode: attributes.uriParams.customerCode, sfAccountId: payload.sfAccountId }]"/>
+    <db:update config-ref="finance-db-config" doc:name="Set Salesforce ID">
+      <db:sql><![CDATA[
+        UPDATE customers
+           SET sf_account_id = :sfAccountId
+         WHERE customer_code = :customerCode
+           AND (sf_account_id IS NULL OR sf_account_id = :sfAccountId)
+      ]]></db:sql>
+      <db:input-parameters>#[vars.link]</db:input-parameters>
+    </db:update>
+    <choice doc:name="Linked?">
+      <when expression="#[payload.affectedRows == 0]">
+        <raise-error type="APP:CONFLICT" doc:name="Not linkable"
+                     description="#['Customer ' ++ vars.link.customerCode ++ ' does not exist or is linked to a different Account.']"/>
+      </when>
+    </choice>
+    <set-payload value="#[output application/json --- { sfAccountId: vars.link.sfAccountId }]" doc:name="Echo link"/>
+  </flow>
+</mule>

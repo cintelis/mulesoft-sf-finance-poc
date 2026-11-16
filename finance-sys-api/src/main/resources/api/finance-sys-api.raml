@@ -1,0 +1,380 @@
+#%RAML 1.0
+title: Finance System API
+version: v1
+description: |
+  System API over the legacy finance database. It hides the Oracle schema and
+  stored procedures behind a small REST contract. All writes are idempotent, so
+  callers can retry safely.
+
+  Send `X-Correlation-ID` to trace a request across APIs. It is echoed on every
+  response and written to every log line.
+mediaType: application/json
+protocols: [HTTP, HTTPS]
+
+types:
+  Timestamp:
+    type: string
+    description: UTC timestamp with up to microsecond precision, no zone suffix.
+    pattern: ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?$
+    example: "2026-11-16T04:26:19.123456"
+
+  SfAccountId:
+    type: string
+    description: 18-character Salesforce Account ID.
+    pattern: ^[a-zA-Z0-9]{18}$
+    example: 001Qy00000AbCdEIAV
+
+  CustomerStatus:
+    type: string
+    enum: [ACTIVE, ON_HOLD, CLOSED]
+
+  CustomerUpsert:
+    type: object
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+        minLength: 1
+        maxLength: 255
+      abn?:
+        type: string
+        description: Australian Business Number. Spaces are removed.
+        maxLength: 14
+      email?:
+        type: string
+        maxLength: 255
+      phone?:
+        type: string
+        maxLength: 40
+      addressLine?:
+        type: string
+        maxLength: 255
+      suburb?:
+        type: string
+        maxLength: 100
+      state?:
+        type: string
+        enum: [NSW, VIC, QLD, WA, SA, TAS, NT, ACT]
+      postcode?:
+        type: string
+        pattern: ^\d{4}$
+      status?: CustomerStatus
+      creditLimit?:
+        type: number
+        minimum: 0
+    example:
+      name: Harbour City Plumbing Pty Ltd
+      abn: 51 824 753 556
+      email: accounts@harbourcityplumbing.example
+      state: NSW
+      postcode: "2041"
+      status: ACTIVE
+      creditLimit: 25000
+
+  CustomerUpsertResult:
+    type: object
+    properties:
+      customerId: integer
+      sfAccountId: SfAccountId
+      action:
+        type: string
+        enum: [INSERTED, UPDATED]
+
+  Customer:
+    type: object
+    properties:
+      customerId: integer
+      customerCode: string
+      sfAccountId: SfAccountId | nil
+      name: string
+      abn: string | nil
+      email: string | nil
+      phone: string | nil
+      addressLine: string | nil
+      suburb: string | nil
+      state: string | nil
+      postcode: string | nil
+      country: string
+      status: CustomerStatus
+      creditLimit: number
+      lastModified: Timestamp
+
+  CustomerList:
+    type: object
+    properties:
+      count: integer
+      items: Customer[]
+
+  CustomerLink:
+    type: object
+    additionalProperties: false
+    properties:
+      sfAccountId: SfAccountId
+
+  Invoice:
+    type: object
+    properties:
+      invoiceNumber: string
+      customerCode: string
+      sfAccountId: SfAccountId | nil
+      invoiceDate: date-only
+      dueDate: date-only
+      amountExGst: number
+      gstAmount: number
+      totalAmount: number
+      amountPaid: number
+      balance: number
+      currency: string
+      status:
+        type: string
+        enum: [OPEN, PART_PAID, PAID, VOID]
+      description: string | nil
+      lastModified: Timestamp
+
+  InvoicePage:
+    type: object
+    properties:
+      count: integer
+      nextWatermark:
+        type: Timestamp
+        description: Pass this as `modifiedSince` on the next call.
+      items: Invoice[]
+
+  Payment:
+    type: object
+    additionalProperties: false
+    properties:
+      paymentRef:
+        type: string
+        description: Unique payment reference. Acts as the idempotency key.
+        minLength: 1
+        maxLength: 30
+      invoiceNumber:
+        type: string
+        minLength: 1
+        maxLength: 20
+      amount:
+        type: number
+        minimum: 0.01
+      currency?:
+        type: string
+        pattern: ^[A-Z]{3}$
+        default: AUD
+      paymentDate: date-only
+      method:
+        type: string
+        enum: [EFT, BPAY, CARD, CHEQUE]
+      payerName?:
+        type: string
+        maxLength: 255
+      sourceFile?:
+        type: string
+        maxLength: 255
+    example:
+      paymentRef: PAY-20261116-0001
+      invoiceNumber: INV-100002
+      amount: 1375.00
+      paymentDate: 2026-11-16
+      method: EFT
+      payerName: Harbour City Plumbing
+      sourceFile: payments_20261116.csv
+
+  PaymentResult:
+    type: object
+    properties:
+      paymentRef: string
+      invoiceNumber: string
+      result:
+        type: string
+        enum: [APPLIED, DUPLICATE]
+      invoiceStatus: string
+
+  ReconReport:
+    type: object
+    properties:
+      count: integer
+      items:
+        type: array
+        items:
+          type: object
+          properties:
+            sfAccountId: SfAccountId
+            customerCode: string
+            rowHash:
+              type: string
+              description: |
+                SHA-256 (lowercase hex) of
+                `UPPER(TRIM(name))|abn|LOWER(email)|postcode|status`,
+                with null treated as an empty string.
+
+  Watermark:
+    type: object
+    properties:
+      syncName: string
+      value: Timestamp
+
+  WatermarkUpdate:
+    type: object
+    additionalProperties: false
+    properties:
+      value: Timestamp
+
+  Health:
+    type: object
+    properties:
+      status:
+        type: string
+        enum: [UP, DOWN]
+      database:
+        type: string
+        enum: [UP, DOWN]
+
+  Error:
+    type: object
+    properties:
+      error:
+        type: object
+        properties:
+          code: string
+          message: string
+          correlationId: string
+          timestamp: string
+    example:
+      error:
+        code: INVOICE_NOT_FOUND
+        message: Unknown invoice INV-999999
+        correlationId: 6f1c2a9e-0d8b-4c57-9a3e-2b7f5d1e8c40
+        timestamp: "2026-11-16T15:04:05.123+11:00"
+
+traits:
+  hasErrors:
+    responses:
+      400:
+        description: The request failed validation.
+        body: Error
+      500:
+        description: Unexpected error.
+        body: Error
+      503:
+        description: The finance database is unavailable. Safe to retry.
+        body: Error
+
+/health:
+  get:
+    description: Liveness check, including a round trip to the database.
+    responses:
+      200:
+        body: Health
+      503:
+        body: Health
+
+/customers:
+  get:
+    is: [hasErrors]
+    description: List finance customers. Use `linked=false` to find customers not yet migrated to Salesforce.
+    queryParameters:
+      linked?:
+        type: boolean
+        description: true for customers with a Salesforce ID, false for those without. Omit for all.
+    responses:
+      200:
+        body: CustomerList
+
+  /{sfAccountId}:
+    uriParameters:
+      sfAccountId: SfAccountId
+    put:
+      is: [hasErrors]
+      description: Create or update the customer for a Salesforce Account. Idempotent on the Salesforce ID.
+      body: CustomerUpsert
+      responses:
+        200:
+          description: An existing customer was updated.
+          body: CustomerUpsertResult
+        201:
+          description: A new customer was created.
+          body: CustomerUpsertResult
+
+/customer-links/{customerCode}:
+  uriParameters:
+    customerCode:
+      type: string
+      maxLength: 20
+  put:
+    is: [hasErrors]
+    description: |
+      Record the Salesforce Account ID against a legacy customer. Used by the
+      migration flow after it creates the Account. Repeating the same link is a no-op.
+    body: CustomerLink
+    responses:
+      200:
+        body: CustomerLink
+      409:
+        description: The customer does not exist, or is linked to a different Account.
+        body: Error
+
+/invoices:
+  get:
+    is: [hasErrors]
+    description: |
+      Invoices changed after `modifiedSince`, oldest change first. A page never
+      splits rows that share a timestamp, so `nextWatermark` is always safe to use.
+    queryParameters:
+      modifiedSince?:
+        type: Timestamp
+        default: "2000-01-01T00:00:00.000000"
+      limit?:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 200
+    responses:
+      200:
+        body: InvoicePage
+
+/payments:
+  post:
+    is: [hasErrors]
+    description: Apply one payment to an invoice. Idempotent on `paymentRef`.
+    body: Payment
+    responses:
+      200:
+        description: The payment reference was already applied. Nothing changed.
+        body: PaymentResult
+      201:
+        description: The payment was applied.
+        body: PaymentResult
+      404:
+        description: The invoice does not exist.
+        body: Error
+      409:
+        description: The invoice is void.
+        body: Error
+
+/recon/customers:
+  get:
+    is: [hasErrors]
+    description: One hash per migrated customer, for reconciliation against Salesforce.
+    responses:
+      200:
+        body: ReconReport
+
+/watermarks/{syncName}:
+  uriParameters:
+    syncName:
+      type: string
+      maxLength: 50
+  get:
+    is: [hasErrors]
+    responses:
+      200:
+        body: Watermark
+      404:
+        body: Error
+  put:
+    is: [hasErrors]
+    description: Create or move a watermark.
+    body: WatermarkUpdate
+    responses:
+      200:
+        body: Watermark

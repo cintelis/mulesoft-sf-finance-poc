@@ -1,0 +1,386 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Unit tests for the implementation flows. The database connector is mocked,
+     so these run anywhere with no database. -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+  <munit:config name="unit-flows-suite"/>
+
+  <!-- ===================== customers ===================== -->
+
+  <munit:test name="upsert-customer-inserted-returns-201-and-normalises-input"
+              description="A new customer gives 201, and the ABN, email and blanks are cleaned before the procedure call">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:stored-procedure" doc:name="Mock upsert_customer">
+        <munit-tools:with-attributes>
+          <munit-tools:with-attribute attributeName="doc:name" whereValue="Call upsert_customer"/>
+        </munit-tools:with-attributes>
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ p_customer_id: 42, p_action: 'INSERTED' }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:payload mediaType="application/json"
+                       value="#[output application/json --- { name: '  Harbour City Plumbing Pty Ltd ', abn: '51 824 753 556', email: 'Accounts@HarbourCity.Example', phone: '   ', state: 'NSW', postcode: '2041', creditLimit: 25000 }]"/>
+        <munit:attributes value="#[{ uriParams: { sfAccountId: '001Qy00000AbCdEIAV' } }]"/>
+      </munit:set-event>
+      <flow-ref name="put:\customers\(sfAccountId):application\json:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(201)]"/>
+      <munit-tools:assert-that expression="#[payload.action]" is="#[MunitTools::equalTo('INSERTED')]"/>
+      <munit-tools:assert-that expression="#[payload.customerId]" is="#[MunitTools::equalTo(42)]"/>
+      <munit-tools:assert-that expression="#[payload.sfAccountId]" is="#[MunitTools::equalTo('001Qy00000AbCdEIAV')]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_customer_name]" is="#[MunitTools::equalTo('Harbour City Plumbing Pty Ltd')]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_abn]" is="#[MunitTools::equalTo('51824753556')]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_email]" is="#[MunitTools::equalTo('accounts@harbourcity.example')]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_phone]" is="#[MunitTools::nullValue()]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_status]" is="#[MunitTools::nullValue()]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_credit_limit]" is="#[MunitTools::equalTo(25000)]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="upsert-customer-updated-returns-200" description="An existing customer gives 200">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:stored-procedure" doc:name="Mock upsert_customer">
+        <munit-tools:with-attributes>
+          <munit-tools:with-attribute attributeName="doc:name" whereValue="Call upsert_customer"/>
+        </munit-tools:with-attributes>
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ p_customer_id: 42, p_action: 'UPDATED' }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:payload mediaType="application/json" value="#[output application/json --- { name: 'Test Co' }]"/>
+        <munit:attributes value="#[{ uriParams: { sfAccountId: '001Qy00000AbCdEIAV' } }]"/>
+      </munit:set-event>
+      <flow-ref name="put:\customers\(sfAccountId):application\json:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]"/>
+      <munit-tools:assert-that expression="#[payload.action]" is="#[MunitTools::equalTo('UPDATED')]"/>
+      <munit-tools:verify-call processor="db:stored-procedure" times="1"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="list-customers-maps-columns-and-passes-filter" description="Rows are renamed to the API contract and the linked filter reaches the query">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock customers">
+        <munit-tools:with-attributes>
+          <munit-tools:with-attribute attributeName="doc:name" whereValue="Select customers"/>
+        </munit-tools:with-attributes>
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[[
+            { CUSTOMER_ID: 1, CUSTOMER_CODE: 'C001001', SF_ACCOUNT_ID: null, CUSTOMER_NAME: 'Harbour City Plumbing Pty Ltd', ABN: '51824753556', EMAIL: 'a@b.example', PHONE: null, ADDRESS_LINE: '12 Wharf Rd', SUBURB: 'Balmain', STATE_CODE: 'NSW', POSTCODE: '2041', COUNTRY_CODE: 'AU', STATUS: 'ACTIVE', CREDIT_LIMIT: 25000, LAST_MODIFIED: '2026-11-16T04:26:19.000001' },
+            { CUSTOMER_ID: 2, CUSTOMER_CODE: 'C001002', SF_ACCOUNT_ID: null, CUSTOMER_NAME: 'Yarra Valley Catering', ABN: null, EMAIL: null, PHONE: null, ADDRESS_LINE: null, SUBURB: null, STATE_CODE: 'VIC', POSTCODE: '3777', COUNTRY_CODE: 'AU', STATUS: 'ON_HOLD', CREDIT_LIMIT: 0, LAST_MODIFIED: '2026-11-16T04:26:19.000002' }
+          ]]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:attributes value="#[{ queryParams: { linked: 'false' } }]"/>
+      </munit:set-event>
+      <flow-ref name="get:\customers:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.linked]" is="#[MunitTools::equalTo('false')]"/>
+      <munit-tools:assert-that expression="#[payload.count]" is="#[MunitTools::equalTo(2)]"/>
+      <munit-tools:assert-that expression="#[payload.items[0].customerCode]" is="#[MunitTools::equalTo('C001001')]"/>
+      <munit-tools:assert-that expression="#[payload.items[0].name]" is="#[MunitTools::equalTo('Harbour City Plumbing Pty Ltd')]"/>
+      <munit-tools:assert-that expression="#[payload.items[0].sfAccountId]" is="#[MunitTools::nullValue()]"/>
+      <munit-tools:assert-that expression="#[payload.items[1].state]" is="#[MunitTools::equalTo('VIC')]"/>
+      <munit-tools:assert-that expression="#[payload.items[1].status]" is="#[MunitTools::equalTo('ON_HOLD')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="list-customers-defaults-filter-to-any" description="With no query parameter the filter is 'any'">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock customers">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[[]]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:attributes value="#[{ queryParams: {} }]"/>
+      </munit:set-event>
+      <flow-ref name="get:\customers:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.linked]" is="#[MunitTools::equalTo('any')]"/>
+      <munit-tools:assert-that expression="#[payload.count]" is="#[MunitTools::equalTo(0)]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="link-customer-success" description="One updated row echoes the link">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:update" doc:name="Mock link">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ affectedRows: 1 }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:payload mediaType="application/json" value="#[output application/json --- { sfAccountId: '001Qy00000AbCdEIAV' }]"/>
+        <munit:attributes value="#[{ uriParams: { customerCode: 'C001001' } }]"/>
+      </munit:set-event>
+      <flow-ref name="put:\customer-links\(customerCode):application\json:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[payload.sfAccountId]" is="#[MunitTools::equalTo('001Qy00000AbCdEIAV')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="link-customer-no-row-raises-conflict" description="Zero updated rows is a conflict"
+              expectedErrorType="APP:CONFLICT">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:update" doc:name="Mock link">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ affectedRows: 0 }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:payload mediaType="application/json" value="#[output application/json --- { sfAccountId: '001Qy00000AbCdEIAV' }]"/>
+        <munit:attributes value="#[{ uriParams: { customerCode: 'NOPE' } }]"/>
+      </munit:set-event>
+      <flow-ref name="put:\customer-links\(customerCode):application\json:finance-sys-api-config"/>
+    </munit:execution>
+  </munit:test>
+
+  <!-- ===================== invoices ===================== -->
+
+  <munit:test name="list-invoices-maps-rows-and-advances-watermark"
+              description="Balance is calculated and the watermark is the last row's timestamp">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock invoices">
+        <munit-tools:with-attributes>
+          <munit-tools:with-attribute attributeName="doc:name" whereValue="Select changed invoices"/>
+        </munit-tools:with-attributes>
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[[
+            { INVOICE_NUMBER: 'INV-100004', CUSTOMER_CODE: 'C001002', SF_ACCOUNT_ID: '001Qy00000AbCdEIAV', INVOICE_DATE: '2026-10-20', DUE_DATE: '2026-11-19', AMOUNT_EX_GST: 2300.00, GST_AMOUNT: 230.00, TOTAL_AMOUNT: 2530.00, AMOUNT_PAID: 1000.00, CURRENCY_CODE: 'AUD', STATUS: 'PART_PAID', DESCRIPTION: 'Corporate lunch series', LAST_MODIFIED: '2026-11-16T04:26:19.100000' },
+            { INVOICE_NUMBER: 'INV-100005', CUSTOMER_CODE: 'C001003', SF_ACCOUNT_ID: null, INVOICE_DATE: '2026-09-22', DUE_DATE: '2026-10-22', AMOUNT_EX_GST: 5400.00, GST_AMOUNT: 540.00, TOTAL_AMOUNT: 5940.00, AMOUNT_PAID: 0, CURRENCY_CODE: 'AUD', STATUS: 'OPEN', DESCRIPTION: null, LAST_MODIFIED: '2026-11-16T04:26:19.200000' }
+          ]]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:attributes value="#[{ queryParams: { modifiedSince: '2026-11-01T00:00:00', limit: '50' } }]"/>
+      </munit:set-event>
+      <flow-ref name="get:\invoices:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.limit]" is="#[MunitTools::equalTo(50)]"/>
+      <munit-tools:assert-that expression="#[payload.count]" is="#[MunitTools::equalTo(2)]"/>
+      <munit-tools:assert-that expression="#[payload.nextWatermark]" is="#[MunitTools::equalTo('2026-11-16T04:26:19.200000')]"/>
+      <munit-tools:assert-that expression="#[payload.items[0].balance]" is="#[MunitTools::equalTo(1530)]"/>
+      <munit-tools:assert-that expression="#[payload.items[0].sfAccountId]" is="#[MunitTools::equalTo('001Qy00000AbCdEIAV')]"/>
+      <munit-tools:assert-that expression="#[payload.items[1].balance]" is="#[MunitTools::equalTo(5940)]"/>
+      <munit-tools:assert-that expression="#[payload.items[1].invoiceDate]" is="#[MunitTools::equalTo('2026-09-22')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="list-invoices-empty-page-keeps-watermark"
+              description="No rows hands the caller's watermark back, and defaults apply">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock invoices">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[[]]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:attributes value="#[{ queryParams: {} }]"/>
+      </munit:set-event>
+      <flow-ref name="get:\invoices:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.limit]" is="#[MunitTools::equalTo(200)]"/>
+      <munit-tools:assert-that expression="#[payload.count]" is="#[MunitTools::equalTo(0)]"/>
+      <munit-tools:assert-that expression="#[payload.nextWatermark]" is="#[MunitTools::equalTo('2000-01-01T00:00:00.000000')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <!-- ===================== payments ===================== -->
+
+  <munit:test name="apply-payment-applied-returns-201" description="An applied payment gives 201 and typed procedure parameters">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:stored-procedure" doc:name="Mock apply_payment">
+        <munit-tools:with-attributes>
+          <munit-tools:with-attribute attributeName="doc:name" whereValue="Call apply_payment"/>
+        </munit-tools:with-attributes>
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ p_result: 'APPLIED', p_invoice_status: 'PAID' }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:payload mediaType="application/json"
+                       value="#[output application/json --- { paymentRef: 'PAY-20261116-0001', invoiceNumber: 'INV-100002', amount: 1375.00, paymentDate: '2026-11-16', method: 'EFT', payerName: 'Harbour City Plumbing' }]"/>
+      </munit:set-event>
+      <flow-ref name="post:\payments:application\json:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(201)]"/>
+      <munit-tools:assert-that expression="#[payload.result]" is="#[MunitTools::equalTo('APPLIED')]"/>
+      <munit-tools:assert-that expression="#[payload.invoiceStatus]" is="#[MunitTools::equalTo('PAID')]"/>
+      <munit-tools:assert-that expression="#[payload.paymentRef]" is="#[MunitTools::equalTo('PAY-20261116-0001')]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_currency_code]" is="#[MunitTools::equalTo('AUD')]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_payment_date as String]" is="#[MunitTools::equalTo('2026-11-16')]"/>
+      <munit-tools:assert-that expression="#[vars.params.p_amount]" is="#[MunitTools::equalTo(1375)]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="apply-payment-duplicate-returns-200" description="A repeated payment reference gives 200 DUPLICATE">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:stored-procedure" doc:name="Mock apply_payment">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ p_result: 'DUPLICATE', p_invoice_status: 'PAID' }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:payload mediaType="application/json"
+                       value="#[output application/json --- { paymentRef: 'PAY-20261116-0001', invoiceNumber: 'INV-100002', amount: 1375.00, currency: 'AUD', paymentDate: '2026-11-16', method: 'EFT' }]"/>
+      </munit:set-event>
+      <flow-ref name="post:\payments:application\json:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(200)]"/>
+      <munit-tools:assert-that expression="#[payload.result]" is="#[MunitTools::equalTo('DUPLICATE')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <!-- ===================== support ===================== -->
+
+  <munit:test name="health-up" description="Database reachable gives UP">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock ping">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[[{ OK: 1 }]]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <flow-ref name="get:\health:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[payload.status]" is="#[MunitTools::equalTo('UP')]"/>
+      <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::nullValue()]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="health-down-returns-503" description="Database unreachable gives 503 DOWN instead of an error">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock ping failure">
+        <munit-tools:then-return>
+          <munit-tools:error typeId="DB:CONNECTIVITY"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <flow-ref name="get:\health:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[payload.database]" is="#[MunitTools::equalTo('DOWN')]"/>
+      <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(503)]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="recon-maps-hashes" description="Reconciliation rows are renamed to the API contract">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock recon">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[[{ SF_ACCOUNT_ID: '001Qy00000AbCdEIAV', CUSTOMER_CODE: 'C001001', ROW_HASH: 'abc123' }]]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <flow-ref name="get:\recon\customers:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[payload.count]" is="#[MunitTools::equalTo(1)]"/>
+      <munit-tools:assert-that expression="#[payload.items[0].rowHash]" is="#[MunitTools::equalTo('abc123')]"/>
+      <munit-tools:assert-that expression="#[payload.items[0].sfAccountId]" is="#[MunitTools::equalTo('001Qy00000AbCdEIAV')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="get-watermark-found" description="An existing watermark is returned">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock watermark">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[[{ SYNC_NAME: 'invoice-sync', LAST_VALUE: '2026-11-16T04:26:19.200000' }]]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:attributes value="#[{ uriParams: { syncName: 'invoice-sync' } }]"/>
+      </munit:set-event>
+      <flow-ref name="get:\watermarks\(syncName):finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[payload.syncName]" is="#[MunitTools::equalTo('invoice-sync')]"/>
+      <munit-tools:assert-that expression="#[payload.value]" is="#[MunitTools::equalTo('2026-11-16T04:26:19.200000')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="get-watermark-missing-raises-not-found" description="An unknown watermark is a 404"
+              expectedErrorType="APP:NOT_FOUND">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock watermark">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[[]]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:attributes value="#[{ uriParams: { syncName: 'nope' } }]"/>
+      </munit:set-event>
+      <flow-ref name="get:\watermarks\(syncName):finance-sys-api-config"/>
+    </munit:execution>
+  </munit:test>
+
+  <munit:test name="put-watermark-echoes-value" description="Setting a watermark echoes it back">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:update" doc:name="Mock merge">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ affectedRows: 1 }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:payload mediaType="application/json" value="#[output application/json --- { value: '2026-11-16T04:26:19.200000' }]"/>
+        <munit:attributes value="#[{ uriParams: { syncName: 'invoice-sync' } }]"/>
+      </munit:set-event>
+      <flow-ref name="put:\watermarks\(syncName):application\json:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[payload.syncName]" is="#[MunitTools::equalTo('invoice-sync')]"/>
+      <munit-tools:assert-that expression="#[payload.value]" is="#[MunitTools::equalTo('2026-11-16T04:26:19.200000')]"/>
+      <munit-tools:verify-call processor="db:update" times="1"/>
+    </munit:validation>
+  </munit:test>
+</mule>

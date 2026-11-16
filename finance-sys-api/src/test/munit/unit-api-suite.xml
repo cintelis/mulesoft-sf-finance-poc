@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Unit tests through the HTTP listener and APIkit router, with the database
+     mocked. Covers request validation, routing and the error contract. -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+  <munit:config name="unit-api-suite"/>
+  <munit:dynamic-port propertyName="http.port"/>
+
+  <http:request-config name="unit-api-client">
+    <http:request-connection host="localhost" port="${http.port}"/>
+  </http:request-config>
+
+  <munit:test name="api-payment-unknown-invoice-returns-404-error-json"
+              description="ORA-20002 from the procedure becomes 404 INVOICE_NOT_FOUND with the correlation ID echoed">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="post:\payments:application\json:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:stored-procedure" doc:name="Mock ORA-20002">
+        <munit-tools:then-return>
+          <munit-tools:error typeId="DB:QUERY_EXECUTION"
+                             cause="#[java!java::sql::SQLException::new('ORA-20002: Unknown invoice INV-999999\nORA-06512: at FINANCE.APPLY_PAYMENT, line 24')]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <http:request method="POST" config-ref="unit-api-client" path="/api/payments">
+        <http:body>#[output application/json --- { paymentRef: 'PAY-1', invoiceNumber: 'INV-999999', amount: 500, paymentDate: '2026-11-17', method: 'EFT' }]</http:body>
+        <http:headers>#[{ 'X-Correlation-ID': 'unit-test-404' }]</http:headers>
+        <http:response-validator>
+          <http:success-status-code-validator values="200..599"/>
+        </http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[attributes.statusCode]" is="#[MunitTools::equalTo(404)]"/>
+      <munit-tools:assert-that expression="#[payload.error.code]" is="#[MunitTools::equalTo('INVOICE_NOT_FOUND')]"/>
+      <munit-tools:assert-that expression="#[payload.error.message]" is="#[MunitTools::equalTo('Unknown invoice INV-999999')]"/>
+      <munit-tools:assert-that expression="#[payload.error.correlationId]" is="#[MunitTools::equalTo('unit-test-404')]"/>
+      <munit-tools:assert-that expression="#[attributes.headers.'x-correlation-id']" is="#[MunitTools::equalTo('unit-test-404')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="api-payment-invalid-method-returns-400"
+              description="A payment method outside the RAML enum is rejected before the database is called">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="post:\payments:application\json:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:stored-procedure" doc:name="Mock procedure">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ p_result: 'APPLIED', p_invoice_status: 'PAID' }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <http:request method="POST" config-ref="unit-api-client" path="/api/payments">
+        <http:body>#[output application/json --- { paymentRef: 'PAY-2', invoiceNumber: 'INV-100007', amount: 5000, paymentDate: '2026-11-17', method: 'CASH' }]</http:body>
+        <http:response-validator>
+          <http:success-status-code-validator values="200..599"/>
+        </http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[attributes.statusCode]" is="#[MunitTools::equalTo(400)]"/>
+      <munit-tools:assert-that expression="#[payload.error.code]" is="#[MunitTools::equalTo('BAD_REQUEST')]"/>
+      <munit-tools:verify-call processor="db:stored-procedure" times="0"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="api-payment-applied-returns-201-over-http"
+              description="The happy path through the listener and router returns 201 and a generated correlation ID">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="post:\payments:application\json:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:stored-procedure" doc:name="Mock procedure">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ p_result: 'APPLIED', p_invoice_status: 'PART_PAID' }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <http:request method="POST" config-ref="unit-api-client" path="/api/payments">
+        <http:body>#[output application/json --- { paymentRef: 'PAY-3', invoiceNumber: 'INV-100005', amount: 2000, paymentDate: '2026-11-16', method: 'CHEQUE' }]</http:body>
+        <http:response-validator>
+          <http:success-status-code-validator values="200..599"/>
+        </http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[attributes.statusCode]" is="#[MunitTools::equalTo(201)]"/>
+      <munit-tools:assert-that expression="#[payload.invoiceStatus]" is="#[MunitTools::equalTo('PART_PAID')]"/>
+      <munit-tools:assert-that expression="#[attributes.headers.'x-correlation-id']" is="#[MunitTools::notNullValue()]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="api-upsert-customer-bad-salesforce-id-returns-400"
+              description="A Salesforce ID that is not 18 characters is rejected">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="put:\customers\(sfAccountId):application\json:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:execution>
+      <http:request method="PUT" config-ref="unit-api-client" path="/api/customers/too-short">
+        <http:body>#[output application/json --- { name: 'Test Co' }]</http:body>
+        <http:response-validator>
+          <http:success-status-code-validator values="200..599"/>
+        </http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[attributes.statusCode]" is="#[MunitTools::equalTo(400)]"/>
+      <munit-tools:assert-that expression="#[payload.error.code]" is="#[MunitTools::equalTo('BAD_REQUEST')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="api-unknown-resource-returns-404" description="A path that is not in the RAML gives 404 RESOURCE_NOT_FOUND">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+    </munit:enable-flow-sources>
+    <munit:execution>
+      <http:request method="GET" config-ref="unit-api-client" path="/api/nothing-here">
+        <http:response-validator>
+          <http:success-status-code-validator values="200..599"/>
+        </http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[attributes.statusCode]" is="#[MunitTools::equalTo(404)]"/>
+      <munit-tools:assert-that expression="#[payload.error.code]" is="#[MunitTools::equalTo('RESOURCE_NOT_FOUND')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="api-database-down-returns-503" description="A connectivity failure becomes 503 with a retry-safe message">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="get:\invoices:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:select" doc:name="Mock connectivity failure">
+        <munit-tools:then-return>
+          <munit-tools:error typeId="DB:CONNECTIVITY"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <http:request method="GET" config-ref="unit-api-client" path="/api/invoices">
+        <http:response-validator>
+          <http:success-status-code-validator values="200..599"/>
+        </http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[attributes.statusCode]" is="#[MunitTools::equalTo(503)]"/>
+      <munit-tools:assert-that expression="#[payload.error.code]" is="#[MunitTools::equalTo('FINANCE_DB_UNAVAILABLE')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <!-- The error classifier is plain DataWeave, so it can be tested with a plain object. -->
+  <munit:test name="errors-module-classifies-oracle-and-unknown-errors"
+              description="Constraint errors, void invoices and unknown errors map to the right status and never leak internals">
+    <munit:execution>
+      <ee:transform>
+        <ee:message>
+          <ee:set-payload><![CDATA[%dw 2.0
+import classify from modules::Errors
+output application/java
+fun err(ns, id, text) = { errorType: { namespace: ns, identifier: id }, description: text }
+---
+{
+  duplicate: classify(err("DB", "QUERY_EXECUTION", "ORA-00001: unique constraint (FINANCE.CUSTOMERS_SFID_UK) violated")),
+  voidInv:   classify(err("DB", "QUERY_EXECUTION", "ORA-20003: Invoice INV-100014 is void\nORA-06512: at line 1")),
+  check:     classify(err("DB", "QUERY_EXECUTION", "ORA-02290: check constraint (FINANCE.PAYMENTS_AMOUNT_CK) violated")),
+  conflict:  classify(err("APP", "CONFLICT", "Customer X does not exist")),
+  unknown:   classify(err("MULE", "EXPRESSION", "Secret internal detail"))
+}]]></ee:set-payload>
+        </ee:message>
+      </ee:transform>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[payload.duplicate.status]" is="#[MunitTools::equalTo(409)]"/>
+      <munit-tools:assert-that expression="#[payload.duplicate.code]" is="#[MunitTools::equalTo('DUPLICATE_KEY')]"/>
+      <munit-tools:assert-that expression="#[payload.duplicate.message]" is="#[MunitTools::equalTo('A record with the same key already exists.')]"/>
+      <munit-tools:assert-that expression="#[payload.voidInv.status]" is="#[MunitTools::equalTo(409)]"/>
+      <munit-tools:assert-that expression="#[payload.voidInv.message]" is="#[MunitTools::equalTo('Invoice INV-100014 is void')]"/>
+      <munit-tools:assert-that expression="#[payload.check.status]" is="#[MunitTools::equalTo(400)]"/>
+      <munit-tools:assert-that expression="#[payload.conflict.status]" is="#[MunitTools::equalTo(409)]"/>
+      <munit-tools:assert-that expression="#[payload.conflict.message]" is="#[MunitTools::equalTo('Customer X does not exist')]"/>
+      <munit-tools:assert-that expression="#[payload.unknown.status]" is="#[MunitTools::equalTo(500)]"/>
+      <munit-tools:assert-that expression="#[payload.unknown.code]" is="#[MunitTools::equalTo('INTERNAL_ERROR')]"/>
+      <munit-tools:assert-that expression="#[payload.unknown.message contains 'Secret']" is="#[MunitTools::equalTo(false)]"/>
+    </munit:validation>
+  </munit:test>
+</mule>

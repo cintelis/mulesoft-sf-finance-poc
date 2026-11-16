@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- End-to-end tests against the Docker database (infra/docker-compose.yml).
+     Skipped unless Maven runs with -Dintegration.tests=true.
+     The tests only create rows marked IT, and remove them before and after. -->
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+  <munit:config name="integration-suite"/>
+  <munit:dynamic-port propertyName="http.port"/>
+
+  <http:request-config name="it-client">
+    <http:request-connection host="localhost" port="${http.port}"/>
+  </http:request-config>
+
+  <sub-flow name="it-remove-test-rows">
+    <db:delete config-ref="finance-db-config" doc:name="Delete IT payments">
+      <db:sql>DELETE FROM payments WHERE invoice_id IN (SELECT invoice_id FROM invoices WHERE invoice_number = 'INV-IT-0001')</db:sql>
+    </db:delete>
+    <db:delete config-ref="finance-db-config" doc:name="Delete IT invoice">
+      <db:sql>DELETE FROM invoices WHERE invoice_number = 'INV-IT-0001'</db:sql>
+    </db:delete>
+    <db:delete config-ref="finance-db-config" doc:name="Delete IT customer">
+      <db:sql>DELETE FROM customers WHERE sf_account_id = '001IT0000000000AAA'</db:sql>
+    </db:delete>
+    <db:delete config-ref="finance-db-config" doc:name="Delete IT watermark">
+      <db:sql>DELETE FROM sync_watermark WHERE sync_name = 'it-sync'</db:sql>
+    </db:delete>
+  </sub-flow>
+
+  <munit:before-suite name="it-before-suite">
+    <choice>
+      <when expression="#[p('integration.tests') == 'true']">
+        <flow-ref name="it-remove-test-rows"/>
+        <db:insert config-ref="finance-db-config" doc:name="Insert IT invoice">
+          <db:sql><![CDATA[
+            INSERT INTO invoices (invoice_number, customer_id, invoice_date, due_date, amount_ex_gst, gst_amount, description)
+            SELECT 'INV-IT-0001', customer_id, DATE '2026-11-01', DATE '2026-12-01', 1000.00, 100.00, 'Integration test invoice'
+              FROM customers WHERE customer_code = 'C001001'
+          ]]></db:sql>
+        </db:insert>
+      </when>
+    </choice>
+  </munit:before-suite>
+
+  <munit:after-suite name="it-after-suite">
+    <choice>
+      <when expression="#[p('integration.tests') == 'true']">
+        <flow-ref name="it-remove-test-rows"/>
+      </when>
+    </choice>
+  </munit:after-suite>
+
+  <munit:test name="it-health-is-up" description="The API reaches the Docker database"
+              ignore="#[p('integration.tests') != 'true']">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="get:\health:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:execution>
+      <http:request method="GET" config-ref="it-client" path="/api/health">
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[attributes.statusCode]" is="#[MunitTools::equalTo(200)]"/>
+      <munit-tools:assert-that expression="#[payload.database]" is="#[MunitTools::equalTo('UP')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="it-invoices-watermark-round-trip"
+              description="Reading from the start returns the seeded invoices, and reading again from the returned watermark returns nothing"
+              ignore="#[p('integration.tests') != 'true']">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="get:\invoices:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:execution>
+      <http:request method="GET" config-ref="it-client" path="/api/invoices" target="firstPage" targetValue="#[payload]">
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="GET" config-ref="it-client" path="/api/invoices" target="limited" targetValue="#[payload]">
+        <http:query-params>#[{ limit: 1 }]</http:query-params>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="GET" config-ref="it-client" path="/api/invoices" target="secondPage" targetValue="#[payload]">
+        <http:query-params>#[{ modifiedSince: vars.firstPage.nextWatermark }]</http:query-params>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.firstPage.count >= 16]" is="#[MunitTools::equalTo(true)]"/>
+      <munit-tools:assert-that expression="#[(vars.firstPage.items filter ($.invoiceNumber == 'INV-100004'))[0].balance]" is="#[MunitTools::equalTo(1530)]"/>
+      <munit-tools:assert-that expression="#[(vars.firstPage.items filter ($.invoiceNumber == 'INV-100004'))[0].customerCode]" is="#[MunitTools::equalTo('C001002')]"/>
+      <munit-tools:assert-that expression="#[vars.limited.count >= 1 and vars.limited.count &lt; vars.firstPage.count]" is="#[MunitTools::equalTo(true)]"/>
+      <munit-tools:assert-that expression="#[vars.secondPage.count]" is="#[MunitTools::equalTo(0)]"/>
+      <munit-tools:assert-that expression="#[vars.secondPage.nextWatermark]" is="#[MunitTools::equalTo(vars.firstPage.nextWatermark)]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="it-customer-upsert-is-idempotent-and-recon-hash-matches"
+              description="The same Salesforce ID inserts once then updates, and the database hash equals the hash computed in DataWeave"
+              ignore="#[p('integration.tests') != 'true']">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="put:\customers\(sfAccountId):application\json:finance-sys-api-config"/>
+      <munit:enable-flow-source value="get:\customers:finance-sys-api-config"/>
+      <munit:enable-flow-source value="get:\recon\customers:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:execution>
+      <http:request method="PUT" config-ref="it-client" path="/api/customers/001IT0000000000AAA" target="first" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:body>#[output application/json --- { name: 'Integration Test Co', abn: '51 824 753 556', email: 'IT@Example.com', state: 'NSW', postcode: '2000' }]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="PUT" config-ref="it-client" path="/api/customers/001IT0000000000AAA" target="second" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:body>#[output application/json --- { name: ' Integration Test Co Pty Ltd ', abn: '51 824 753 556', email: 'IT@Example.com', state: 'NSW', postcode: '2000', status: 'ON_HOLD', creditLimit: 1500.50 }]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="GET" config-ref="it-client" path="/api/customers" target="linked" targetValue="#[payload]">
+        <http:query-params>#[{ linked: true }]</http:query-params>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="GET" config-ref="it-client" path="/api/recon/customers" target="recon" targetValue="#[payload]">
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <set-variable variableName="customer" value="#[(vars.linked.items filter ($.sfAccountId == '001IT0000000000AAA'))[0]]"/>
+      <set-variable variableName="expectedHash"
+                    value="#[%dw 2.0 import dw::Crypto import toHex from dw::core::Binaries output application/java --- lower(toHex(Crypto::hashWith('INTEGRATION TEST CO PTY LTD|51824753556|it@example.com|2000|ON_HOLD' as Binary {encoding: 'UTF-8'}, 'SHA-256')))]"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.first.status]" is="#[MunitTools::equalTo(201)]"/>
+      <munit-tools:assert-that expression="#[vars.first.body.action]" is="#[MunitTools::equalTo('INSERTED')]"/>
+      <munit-tools:assert-that expression="#[vars.second.status]" is="#[MunitTools::equalTo(200)]"/>
+      <munit-tools:assert-that expression="#[vars.second.body.action]" is="#[MunitTools::equalTo('UPDATED')]"/>
+      <munit-tools:assert-that expression="#[vars.second.body.customerId]" is="#[MunitTools::equalTo(vars.first.body.customerId)]"/>
+      <munit-tools:assert-that expression="#[vars.customer.name]" is="#[MunitTools::equalTo('Integration Test Co Pty Ltd')]"/>
+      <munit-tools:assert-that expression="#[vars.customer.abn]" is="#[MunitTools::equalTo('51824753556')]"/>
+      <munit-tools:assert-that expression="#[vars.customer.email]" is="#[MunitTools::equalTo('it@example.com')]"/>
+      <munit-tools:assert-that expression="#[vars.customer.status]" is="#[MunitTools::equalTo('ON_HOLD')]"/>
+      <munit-tools:assert-that expression="#[vars.customer.creditLimit]" is="#[MunitTools::equalTo(1500.5)]"/>
+      <munit-tools:assert-that expression="#[(vars.recon.items filter ($.sfAccountId == '001IT0000000000AAA'))[0].rowHash]" is="#[MunitTools::equalTo(vars.expectedHash)]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="it-payment-applies-once-then-reports-duplicate"
+              description="A part payment is applied, and sending it again changes nothing"
+              ignore="#[p('integration.tests') != 'true']">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="post:\payments:application\json:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:execution>
+      <set-variable variableName="payment" value="#[{ paymentRef: 'PAY-IT-0001', invoiceNumber: 'INV-IT-0001', amount: 400.25, paymentDate: '2026-11-16', method: 'BPAY', payerName: 'Integration Test', sourceFile: 'it.csv' }]"/>
+      <http:request method="POST" config-ref="it-client" path="/api/payments" target="first" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:body>#[output application/json --- vars.payment]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="POST" config-ref="it-client" path="/api/payments" target="second" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:body>#[output application/json --- vars.payment]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="POST" config-ref="it-client" path="/api/payments" target="final" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:body>#[output application/json --- (vars.payment - 'paymentRef' - 'amount') ++ { paymentRef: 'PAY-IT-0002', amount: 699.75 }]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.first.status]" is="#[MunitTools::equalTo(201)]"/>
+      <munit-tools:assert-that expression="#[vars.first.body.result]" is="#[MunitTools::equalTo('APPLIED')]"/>
+      <munit-tools:assert-that expression="#[vars.first.body.invoiceStatus]" is="#[MunitTools::equalTo('PART_PAID')]"/>
+      <munit-tools:assert-that expression="#[vars.second.status]" is="#[MunitTools::equalTo(200)]"/>
+      <munit-tools:assert-that expression="#[vars.second.body.result]" is="#[MunitTools::equalTo('DUPLICATE')]"/>
+      <munit-tools:assert-that expression="#[vars.final.status]" is="#[MunitTools::equalTo(201)]"/>
+      <munit-tools:assert-that expression="#[vars.final.body.invoiceStatus]" is="#[MunitTools::equalTo('PAID')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="it-payment-business-errors-map-to-http"
+              description="Unknown invoice gives 404, void invoice gives 409, and neither writes a payment"
+              ignore="#[p('integration.tests') != 'true']">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="post:\payments:application\json:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:execution>
+      <http:request method="POST" config-ref="it-client" path="/api/payments" target="unknown" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:body>#[output application/json --- { paymentRef: 'PAY-IT-0003', invoiceNumber: 'INV-999999', amount: 500, paymentDate: '2026-11-17', method: 'EFT' }]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="POST" config-ref="it-client" path="/api/payments" target="voided" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:body>#[output application/json --- { paymentRef: 'PAY-IT-0004', invoiceNumber: 'INV-100014', amount: 704, paymentDate: '2026-11-17', method: 'CARD' }]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.unknown.status]" is="#[MunitTools::equalTo(404)]"/>
+      <munit-tools:assert-that expression="#[vars.unknown.body.error.code]" is="#[MunitTools::equalTo('INVOICE_NOT_FOUND')]"/>
+      <munit-tools:assert-that expression="#[vars.unknown.body.error.message]" is="#[MunitTools::equalTo('Unknown invoice INV-999999')]"/>
+      <munit-tools:assert-that expression="#[vars.voided.status]" is="#[MunitTools::equalTo(409)]"/>
+      <munit-tools:assert-that expression="#[vars.voided.body.error.code]" is="#[MunitTools::equalTo('INVOICE_VOID')]"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="it-watermark-and-link-round-trip"
+              description="Watermarks can be read, created and moved; an unknown watermark is 404; linking an unknown customer is 409"
+              ignore="#[p('integration.tests') != 'true']">
+    <munit:enable-flow-sources>
+      <munit:enable-flow-source value="finance-sys-api-main"/>
+      <munit:enable-flow-source value="get:\watermarks\(syncName):finance-sys-api-config"/>
+      <munit:enable-flow-source value="put:\watermarks\(syncName):application\json:finance-sys-api-config"/>
+      <munit:enable-flow-source value="put:\customer-links\(customerCode):application\json:finance-sys-api-config"/>
+    </munit:enable-flow-sources>
+    <munit:execution>
+      <http:request method="GET" config-ref="it-client" path="/api/watermarks/invoice-sync" target="seeded" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="GET" config-ref="it-client" path="/api/watermarks/it-sync" target="missing" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="PUT" config-ref="it-client" path="/api/watermarks/it-sync">
+        <http:body>#[output application/json --- { value: '2026-11-16T01:02:03' }]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="PUT" config-ref="it-client" path="/api/watermarks/it-sync">
+        <http:body>#[output application/json --- { value: '2026-11-16T04:26:19.123456' }]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="GET" config-ref="it-client" path="/api/watermarks/it-sync" target="moved" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+      <http:request method="PUT" config-ref="it-client" path="/api/customer-links/NOPE" target="badLink" targetValue="#[{ status: attributes.statusCode, body: payload }]">
+        <http:body>#[output application/json --- { sfAccountId: '001IT0000000000AAB' }]</http:body>
+        <http:response-validator><http:success-status-code-validator values="200..599"/></http:response-validator>
+      </http:request>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[vars.seeded.status]" is="#[MunitTools::equalTo(200)]"/>
+      <munit-tools:assert-that expression="#[vars.seeded.body.syncName]" is="#[MunitTools::equalTo('invoice-sync')]"/>
+      <munit-tools:assert-that expression="#[vars.missing.status]" is="#[MunitTools::equalTo(404)]"/>
+      <munit-tools:assert-that expression="#[vars.missing.body.error.code]" is="#[MunitTools::equalTo('NOT_FOUND')]"/>
+      <munit-tools:assert-that expression="#[vars.moved.status]" is="#[MunitTools::equalTo(200)]"/>
+      <munit-tools:assert-that expression="#[vars.moved.body.value]" is="#[MunitTools::equalTo('2026-11-16T04:26:19.123456')]"/>
+      <munit-tools:assert-that expression="#[vars.badLink.status]" is="#[MunitTools::equalTo(409)]"/>
+      <munit-tools:assert-that expression="#[vars.badLink.body.error.code]" is="#[MunitTools::equalTo('CONFLICT')]"/>
+    </munit:validation>
+  </munit:test>
+</mule>
