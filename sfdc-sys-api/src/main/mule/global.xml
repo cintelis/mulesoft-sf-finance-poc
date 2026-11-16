@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- Pick the environment with -Denv=dev|prod. Defaults to local. -->
+  <global-property name="env" value="local" doc:name="Default environment"/>
+
+  <!-- Fallbacks so the app can start, and unit tests can run, when the
+       variables are not set. Real environment variables take precedence. -->
+  <global-property name="SFDC_CONSUMER_KEY" value="not-set" doc:name="Consumer key fallback"/>
+  <global-property name="SFDC_USERNAME" value="not-set" doc:name="Username fallback"/>
+  <global-property name="SFDC_KEYSTORE_PATH" value="not-set" doc:name="Keystore path fallback"/>
+  <global-property name="SFDC_KEYSTORE_PASSWORD" value="not-set" doc:name="Keystore password fallback"/>
+
+  <configuration-properties file="config/${env}.yaml" doc:name="Environment properties"/>
+
+  <http:listener-config name="http-listener-config" doc:name="HTTP listener">
+    <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+  </http:listener-config>
+
+  <!-- OAuth 2.0 JWT bearer flow: the app signs a token with its private key and
+       Salesforce checks it against the certificate on the External Client App.
+       No password or client secret is stored anywhere. -->
+  <salesforce:sfdc-config name="salesforce-config" doc:name="Salesforce">
+    <salesforce:jwt-connection consumerKey="${salesforce.consumerKey}"
+                               keyStore="${salesforce.keyStore}"
+                               storePassword="${salesforce.storePassword}"
+                               certificateAlias="${salesforce.certificateAlias}"
+                               principal="${salesforce.principal}"
+                               tokenEndpoint="${salesforce.tokenEndpoint}"
+                               audienceUrl="${salesforce.audienceUrl}">
+      <reconnection>
+        <reconnect frequency="3000" count="3"/>
+      </reconnection>
+    </salesforce:jwt-connection>
+  </salesforce:sfdc-config>
+
+  <http:request-config name="process-api-client" basePath="${processApi.basePath}" doc:name="Process API">
+    <http:request-connection host="${processApi.host}" port="${processApi.port}"/>
+  </http:request-config>
+
+  <apikit:config name="sfdc-sys-api-config" api="api/sfdc-sys-api.raml"
+                 outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus"
+                 doc:name="APIkit router config"/>
+
+  <!-- Every error leaves the API in the same JSON shape. The mapping from
+       error type to status and code lives in modules/Errors.dwl. -->
+  <error-handler name="global-error-handler" doc:name="Global error handler">
+    <on-error-propagate type="ANY" logException="false" doc:name="Any error">
+      <ee:transform doc:name="Build error response">
+        <ee:message>
+          <ee:set-payload resource="dw/error-response.dwl"/>
+        </ee:message>
+        <ee:variables>
+          <ee:set-variable variableName="httpStatus" resource="dw/error-status.dwl"/>
+        </ee:variables>
+      </ee:transform>
+      <logger level="ERROR" category="sfdc-sys-api" doc:name="Log error"
+              message="#['error status=$(vars.httpStatus) type=$(error.errorType.namespace):$(error.errorType.identifier) description=$(error.description default '')']"/>
+    </on-error-propagate>
+  </error-handler>
+</mule>

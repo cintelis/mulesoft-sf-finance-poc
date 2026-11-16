@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- Subscribes to Change Data Capture for Account.
+       FROM_LAST_REPLAY_ID with autoReplay: the connector stores the ID of the
+       last event it handled, so after a restart it resumes where it stopped
+       and no change is missed (Salesforce keeps events for 72 hours). -->
+  <flow name="account-change-events" initialState="${events.listenerState}" doc:name="account-change-events">
+    <salesforce:replay-channel-listener config-ref="salesforce-config"
+                                        streamingChannel="/data/AccountChangeEvent"
+                                        replayOption="FROM_LAST_REPLAY_ID"
+                                        autoReplay="true"
+                                        doc:name="Account change events"/>
+    <ee:transform doc:name="Map change event">
+      <ee:message>
+        <ee:set-payload resource="dw/account-change-event.dwl"/>
+      </ee:message>
+    </ee:transform>
+    <logger level="INFO" category="sfdc-sys-api" doc:name="Log event"
+            message="#[output application/java --- 'account change event type=' ++ (payload.changeType default 'UNKNOWN') ++ ' accounts=' ++ ((payload.accountIds default []) joinBy ',') ++ ' replayId=' ++ ((payload.replayId default '') as String)]"/>
+    <choice doc:name="Forward?">
+      <when expression="#[p('events.forwardEnabled') == 'true']">
+        <http:request method="POST" config-ref="process-api-client" path="/account-events" doc:name="Forward to process API">
+          <http:headers>#[{ 'X-Correlation-ID': correlationId }]</http:headers>
+        </http:request>
+      </when>
+    </choice>
+    <error-handler>
+      <on-error-propagate type="ANY" logException="false" doc:name="Event failed">
+        <logger level="ERROR" category="sfdc-sys-api" doc:name="Log failure"
+                message="#['account change event failed type=$(error.errorType.namespace):$(error.errorType.identifier) description=$(error.description default '')']"/>
+      </on-error-propagate>
+    </error-handler>
+  </flow>
+</mule>

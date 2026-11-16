@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- GET /health -->
+  <flow name="get:\health:sfdc-sys-api-config" doc:name="Health">
+    <try doc:name="Try Salesforce">
+      <salesforce:query config-ref="salesforce-config" doc:name="Ping Salesforce">
+        <salesforce:salesforce-query>SELECT Id FROM Organization LIMIT 1</salesforce:salesforce-query>
+      </salesforce:query>
+      <set-payload value="#[output application/json --- { status: 'UP', salesforce: 'UP' }]" doc:name="Up"/>
+      <error-handler>
+        <on-error-continue type="ANY" logException="false" doc:name="Salesforce down">
+          <logger level="WARN" category="sfdc-sys-api" doc:name="Log down"
+                  message="#['health check failed: ' ++ (error.description default '')]"/>
+          <set-variable variableName="httpStatus" value="#[503]" doc:name="503"/>
+          <set-payload value="#[output application/json --- { status: 'DOWN', salesforce: 'DOWN' }]" doc:name="Down"/>
+        </on-error-continue>
+      </error-handler>
+    </try>
+  </flow>
+
+  <!-- PUT /invoices : upsert on the invoice number (external ID) -->
+  <flow name="put:\invoices:application\json:sfdc-sys-api-config" doc:name="Upsert invoices">
+    <set-variable variableName="keys" value="#[output application/java --- payload.items map $.invoiceNumber]" doc:name="Remember invoice numbers"/>
+    <ee:transform doc:name="Map to Invoice__c records">
+      <ee:variables>
+        <ee:set-variable variableName="records" resource="dw/invoice-records.dwl"/>
+      </ee:variables>
+    </ee:transform>
+    <salesforce:upsert config-ref="salesforce-config" objectType="Invoice__c"
+                       externalIdFieldName="Invoice_Number__c" doc:name="Upsert Invoice__c">
+      <salesforce:records>#[vars.records]</salesforce:records>
+    </salesforce:upsert>
+    <flow-ref name="build-batch-result" doc:name="Build batch result"/>
+    <logger level="INFO" category="sfdc-sys-api" doc:name="Log invoices"
+            message="#[output application/java --- 'invoice upsert total=' ++ (payload.total as String) ++ ' failed=' ++ (payload.failed as String)]"/>
+  </flow>
+
+  <!-- PUT /accounts : upsert on the finance customer code (external ID) -->
+  <flow name="put:\accounts:application\json:sfdc-sys-api-config" doc:name="Upsert accounts">
+    <set-variable variableName="keys" value="#[output application/java --- payload.items map $.financeCustomerCode]" doc:name="Remember customer codes"/>
+    <ee:transform doc:name="Map to Account records">
+      <ee:variables>
+        <ee:set-variable variableName="records" resource="dw/account-records.dwl"/>
+      </ee:variables>
+    </ee:transform>
+    <salesforce:upsert config-ref="salesforce-config" objectType="Account"
+                       externalIdFieldName="Finance_Customer_Code__c" doc:name="Upsert Account">
+      <salesforce:records>#[vars.records]</salesforce:records>
+    </salesforce:upsert>
+    <flow-ref name="build-batch-result" doc:name="Build batch result"/>
+    <logger level="INFO" category="sfdc-sys-api" doc:name="Log accounts"
+            message="#[output application/java --- 'account upsert total=' ++ (payload.total as String) ++ ' failed=' ++ (payload.failed as String)]"/>
+  </flow>
+
+  <!-- One outcome per record. 207 when Salesforce rejected at least one. -->
+  <sub-flow name="build-batch-result" doc:name="build-batch-result">
+    <ee:transform doc:name="Map upsert result">
+      <ee:message>
+        <ee:set-payload resource="dw/upsert-result.dwl"/>
+      </ee:message>
+    </ee:transform>
+    <set-variable variableName="httpStatus" value="#[output application/java --- if (payload.failed > 0) 207 else 200]" doc:name="207 on partial failure"/>
+  </sub-flow>
+
+  <!-- GET /accounts -->
+  <flow name="get:\accounts:sfdc-sys-api-config" doc:name="List accounts">
+    <set-variable variableName="limit" value="#[(attributes.queryParams.limit default 2000) as Number]" doc:name="Read limit"/>
+    <salesforce:query config-ref="salesforce-config" doc:name="Query accounts">
+      <salesforce:salesforce-query><![CDATA[#["SELECT Id, Name, ABN__c, Accounts_Email__c, Phone, BillingStreet, BillingCity, BillingState, BillingPostalCode, BillingCountry, Account_Status__c, Credit_Limit__c, Finance_Customer_Code__c, LastModifiedDate FROM Account ORDER BY Name LIMIT " ++ (vars.limit as String)]]]></salesforce:salesforce-query>
+    </salesforce:query>
+    <ee:transform doc:name="Map accounts">
+      <ee:message>
+        <ee:set-payload resource="dw/accounts-response.dwl"/>
+      </ee:message>
+    </ee:transform>
+  </flow>
+
+  <!-- GET /accounts/{id} -->
+  <flow name="get:\accounts\(id):sfdc-sys-api-config" doc:name="Get account">
+    <set-variable variableName="accountId" value="#[attributes.uriParams.id]" doc:name="Read account ID"/>
+    <salesforce:query config-ref="salesforce-config" doc:name="Query account">
+      <salesforce:salesforce-query><![CDATA[SELECT Id, Name, ABN__c, Accounts_Email__c, Phone, BillingStreet, BillingCity, BillingState, BillingPostalCode, BillingCountry, Account_Status__c, Credit_Limit__c, Finance_Customer_Code__c, LastModifiedDate FROM Account WHERE Id = ':accountId']]></salesforce:salesforce-query>
+      <salesforce:parameters>#[{ accountId: vars.accountId }]</salesforce:parameters>
+    </salesforce:query>
+    <ee:transform doc:name="Map accounts">
+      <ee:message>
+        <ee:set-payload resource="dw/accounts-response.dwl"/>
+      </ee:message>
+    </ee:transform>
+    <choice doc:name="Found?">
+      <when expression="#[payload.count == 0]">
+        <raise-error type="APP:NOT_FOUND" doc:name="No account"
+                     description="#['No Account with ID ' ++ vars.accountId]"/>
+      </when>
+    </choice>
+    <set-payload value="#[output application/json --- payload.items[0]]" doc:name="First account"/>
+  </flow>
+</mule>

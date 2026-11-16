@@ -28,3 +28,6 @@ Thumbs.db
 # Salesforce CLI local state
 .sf/
 .sfdx/
+
+# Per-app local files: keystores, exported certificates, env files
+**/local/

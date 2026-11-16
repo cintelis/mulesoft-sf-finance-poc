@@ -1,0 +1,29 @@
+# Local development against the Salesforce Developer Edition org.
+# Nothing secret is stored here. Set these environment variables
+# (see local/sfdc.env, which is git-ignored):
+#   SFDC_CONSUMER_KEY       consumer key of the External Client App
+#   SFDC_USERNAME           Salesforce username the integration runs as
+#   SFDC_KEYSTORE_PATH      absolute path to the JKS keystore holding the JWT signing key
+#   SFDC_KEYSTORE_PASSWORD  keystore password
+http:
+  port: "8082"
+
+salesforce:
+  consumerKey: "${SFDC_CONSUMER_KEY}"
+  principal: "${SFDC_USERNAME}"
+  keyStore: "${SFDC_KEYSTORE_PATH}"
+  storePassword: "${SFDC_KEYSTORE_PASSWORD}"
+  certificateAlias: "mule-sfdc"
+  tokenEndpoint: "https://login.salesforce.com/services/oauth2/token"
+  audienceUrl: "https://login.salesforce.com"
+
+events:
+  # started | stopped : whether to subscribe to Account change events
+  listenerState: "started"
+  # true to forward events to the process API; false to only log them
+  forwardEnabled: "false"
+
+processApi:
+  host: "localhost"
+  port: "8083"
+  basePath: "/api"

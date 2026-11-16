@@ -1,0 +1,242 @@
+#%RAML 1.0
+title: Salesforce System API
+version: v1
+description: |
+  System API over Salesforce. It hides the Salesforce object model, API names and
+  authentication behind a small REST contract. Field values use Salesforce's own
+  vocabulary (for example the status `Part Paid`); translating between systems
+  is the process API's job.
+
+  All writes are upserts on an external ID, so callers can retry safely.
+
+  Send `X-Correlation-ID` to trace a request across APIs. It is echoed on every
+  response and written to every log line.
+mediaType: application/json
+protocols: [HTTP, HTTPS]
+
+types:
+  SfAccountId:
+    type: string
+    description: 18-character Salesforce Account ID.
+    pattern: ^[a-zA-Z0-9]{18}$
+    example: 001Qy00000AbCdEIAV
+
+  InvoiceUpsert:
+    type: object
+    additionalProperties: false
+    description: Only the fields sent are written. Omit a field to leave it unchanged.
+    properties:
+      invoiceNumber:
+        type: string
+        description: Finance invoice number. The upsert key.
+        minLength: 1
+        maxLength: 20
+      sfAccountId?: SfAccountId
+      invoiceDate?: date-only
+      dueDate?: date-only
+      amountExGst?: number
+      gstAmount?: number
+      totalAmount?: number
+      amountPaid?: number
+      status?:
+        type: string
+        enum: [Open, Part Paid, Paid, Void]
+      description?:
+        type: string
+        maxLength: 255
+
+  InvoiceBatch:
+    type: object
+    additionalProperties: false
+    properties:
+      items:
+        type: InvoiceUpsert[]
+        minItems: 1
+        maxItems: 200
+    example:
+      items:
+        - invoiceNumber: INV-100002
+          sfAccountId: 001Qy00000AbCdEIAV
+          invoiceDate: 2026-10-15
+          dueDate: 2026-11-14
+          amountExGst: 1250.00
+          gstAmount: 125.00
+          totalAmount: 1375.00
+          amountPaid: 0
+          status: Open
+          description: Emergency call-out
+
+  AccountUpsert:
+    type: object
+    additionalProperties: false
+    properties:
+      financeCustomerCode:
+        type: string
+        description: Customer code in the finance system. The upsert key.
+        minLength: 1
+        maxLength: 20
+      name:
+        type: string
+        minLength: 1
+        maxLength: 255
+      abn?: string
+      email?: string
+      phone?: string
+      billingStreet?: string
+      billingCity?: string
+      billingState?: string
+      billingPostalCode?: string
+      billingCountry?: string
+      status?:
+        type: string
+        enum: [Active, On Hold, Closed]
+      creditLimit?: number
+
+  AccountBatch:
+    type: object
+    additionalProperties: false
+    properties:
+      items:
+        type: AccountUpsert[]
+        minItems: 1
+        maxItems: 200
+
+  UpsertOutcome:
+    type: object
+    properties:
+      key:
+        type: string
+        description: The business key that was sent (invoice number or finance customer code).
+      success: boolean
+      id:
+        type: string | nil
+        description: Salesforce record ID.
+      created: boolean
+      errors: string[]
+
+  BatchResult:
+    type: object
+    properties:
+      total: integer
+      succeeded: integer
+      failed: integer
+      results: UpsertOutcome[]
+
+  Account:
+    type: object
+    properties:
+      id: SfAccountId
+      name: string
+      abn: string | nil
+      email: string | nil
+      phone: string | nil
+      billingStreet: string | nil
+      billingCity: string | nil
+      billingState: string | nil
+      billingPostalCode: string | nil
+      billingCountry: string | nil
+      status: string | nil
+      creditLimit: number | nil
+      financeCustomerCode: string | nil
+      lastModified: string
+
+  AccountList:
+    type: object
+    properties:
+      count: integer
+      items: Account[]
+
+  Health:
+    type: object
+    properties:
+      status:
+        type: string
+        enum: [UP, DOWN]
+      salesforce:
+        type: string
+        enum: [UP, DOWN]
+
+  Error:
+    type: object
+    properties:
+      error:
+        type: object
+        properties:
+          code: string
+          message: string
+          correlationId: string
+          timestamp: string
+
+traits:
+  hasErrors:
+    responses:
+      400:
+        description: The request failed validation.
+        body: Error
+      500:
+        description: Unexpected error.
+        body: Error
+      503:
+        description: Salesforce is unavailable or a limit was reached. Safe to retry.
+        body: Error
+
+/health:
+  get:
+    description: Liveness check, including a round trip to Salesforce.
+    responses:
+      200:
+        body: Health
+      503:
+        body: Health
+
+/invoices:
+  put:
+    is: [hasErrors]
+    description: |
+      Upsert up to 200 invoices on the invoice number. Each record succeeds or
+      fails on its own: check `results` for per-record outcomes.
+    body: InvoiceBatch
+    responses:
+      200:
+        description: Every record was written.
+        body: BatchResult
+      207:
+        description: At least one record was rejected by Salesforce.
+        body: BatchResult
+
+/accounts:
+  get:
+    is: [hasErrors]
+    description: List Accounts with the fields that sync to finance. Used for reconciliation.
+    queryParameters:
+      limit?:
+        type: integer
+        minimum: 1
+        maximum: 2000
+        default: 2000
+    responses:
+      200:
+        body: AccountList
+  put:
+    is: [hasErrors]
+    description: |
+      Upsert up to 200 Accounts on the finance customer code. Used by the
+      historical customer migration.
+    body: AccountBatch
+    responses:
+      200:
+        body: BatchResult
+      207:
+        body: BatchResult
+
+  /{id}:
+    uriParameters:
+      id: SfAccountId
+    get:
+      is: [hasErrors]
+      description: One Account with the fields that sync to finance.
+      responses:
+        200:
+          body: Account
+        404:
+          body: Error
