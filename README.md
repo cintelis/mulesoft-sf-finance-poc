@@ -84,12 +84,12 @@ mvn clean test "-Dintegration.tests=true"   # plus end-to-end tests against the 
 ## Run finance-sys-api locally and smoke-test it
 
 Needs a Mule Enterprise runtime. Anypoint Code Builder installs one under
-`%USERPROFILE%AnypointCodeBuilderuntime` (command **MuleSoft: Install Runtime**).
+`%USERPROFILE%\AnypointCodeBuilder\runtime` (command **MuleSoft: Install Runtime**).
 
 ```powershell
 # from the runtime folder, with FINANCE_DB_PASSWORD and JAVA_HOME (JDK 17) set
-Copy-Item <repo>inance-sys-api	argetinance-sys-api-*-mule-application.jar appsinance-sys-api.jar
-binmule.bat console
+Copy-Item <repo>\finance-sys-api\target\finance-sys-api-*-mule-application.jar apps\finance-sys-api.jar
+bin\mule.bat console
 ```
 
 Then, from Git Bash:
