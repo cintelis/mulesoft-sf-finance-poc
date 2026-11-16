@@ -75,11 +75,22 @@ async function sfCount(soql) {
   try { return JSON.parse(out).result.totalSize; } catch { return null; }
 }
 
+async function sfInvoiceStatuses() {
+  const out = await run('sf', ['data', 'query', '--target-org', SF_ORG, '--json', '-q', '"SELECT Status__c, COUNT(Id) n FROM Invoice__c GROUP BY Status__c"']);
+  if (out === null) return null;
+  try {
+    const counts = {};
+    for (const row of JSON.parse(out).result.records) counts[row.Status__c || 'No status'] = row.n;
+    return counts;
+  } catch { return null; }
+}
+
 async function loadSalesforce() {
-  const [accounts, invoices, orgOut] = await Promise.all([
+  const [accounts, invoices, orgOut, invoicesByStatus] = await Promise.all([
     sfCount('SELECT COUNT() FROM Account'),
     sfCount('SELECT COUNT() FROM Invoice__c'),
     run('sf', ['org', 'display', '--target-org', SF_ORG, '--json']),
+    sfInvoiceStatuses(),
   ]);
   let links = null;
   try {
@@ -94,7 +105,7 @@ async function loadSalesforce() {
       changeDataCapture: `${setup}/lightning/setup/CdcObjectEnablement/home`,
     };
   } catch { /* CLI not available or not logged in */ }
-  return { accounts, invoices, links };
+  return { accounts, invoices, invoicesByStatus, links };
 }
 
 // ---------------------------------------------------------------------------
@@ -212,6 +223,16 @@ function countFiles(folder) {
   } catch { return null; }
 }
 
+function listFiles(folder) {
+  try {
+    const dir = path.join(REPO, 'infra', 'sftp-data', folder);
+    return fs.readdirSync(dir).filter((f) => !f.startsWith('.')).map((name) => {
+      const stat = fs.statSync(path.join(dir, name));
+      return { name, size: stat.size, modified: stat.mtime.toISOString() };
+    }).sort((a, b) => b.modified.localeCompare(a.modified)).slice(0, 15);
+  } catch { return []; }
+}
+
 function listSamples() {
   try {
     return fs.readdirSync(path.join(REPO, 'samples', 'payments')).filter((f) => f.endsWith('.csv')).sort();
@@ -219,7 +240,7 @@ function listSamples() {
 }
 
 async function loadState() {
-  const [financeHealth, sfdcHealth, prcHealth, customers, invoices, status, paymentsHealth] = await Promise.all([
+  const [financeHealth, sfdcHealth, prcHealth, customers, invoices, status, paymentsHealth, history] = await Promise.all([
     call(`${APIS.finance}/health`, { timeout: 5000 }),
     call(`${APIS.sfdc}/health`, { timeout: 12000 }),
     call(`${APIS.prc}/health`, { timeout: 12000 }),
@@ -227,6 +248,7 @@ async function loadState() {
     call(`${APIS.finance}/invoices?limit=1000`),
     call(`${APIS.prc}/status`, { timeout: 5000 }),
     call(`${APIS.paymentsFile}/health`, { timeout: 8000 }),
+    call(`${APIS.prc}/status/history`, { timeout: 5000 }),
   ]);
   const customerItems = customers.ok ? customers.body.items : null;
   const invoiceItems = invoices.ok ? invoices.body.items : null;
@@ -263,8 +285,10 @@ async function loadState() {
       invoicesLinked: invoiceItems ? invoiceItems.filter((i) => i.sfAccountId).length : null,
     },
     salesforce: cached('salesforce', 20000, loadSalesforce),
-    sftp: { inbound: countFiles('inbound'), archive: countFiles('archive'), error: countFiles('error') },
+    sftp: { inbound: countFiles('inbound'), archive: countFiles('archive'), error: countFiles('error'),
+      files: { inbound: listFiles('inbound'), archive: listFiles('archive'), error: listFiles('error') } },
     runs: status.ok ? status.body : null,
+    history: history.ok && Array.isArray(history.body) ? history.body : null,
     issues: cached('issues', 3000, loadIssues),
     samples: listSamples(),
   };

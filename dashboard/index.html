@@ -54,6 +54,10 @@
   .node .title { font-size: 13.5px; font-weight: 650; fill: var(--ink); }
   .node .sub { font-size: 11.5px; fill: var(--muted); }
   .node .metric { font-size: 12px; fill: var(--ink); }
+  .node .metric2 { font-size: 11px; fill: var(--muted); }
+  .files { margin: 0; padding: 0; list-style: none; }
+  .files li { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+  .files .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .dot.up { fill: var(--up); } .dot.down { fill: var(--down); } .dot.off { fill: var(--off); } .dot.unknown { fill: var(--warn); }
   .edge { fill: none; stroke: var(--off); stroke-width: 1.6; }
   .edge.live { stroke: var(--accent); stroke-dasharray: 6 5; animation: flow 1.1s linear infinite; }
@@ -141,12 +145,12 @@
     <details class="section top" id="activity-section"><summary>Activity this session <span class="n" id="activity-count">(0)</span></summary>
       <div id="activity" class="empty">Nothing run yet.</div>
     </details>
-    <h2>Last runs recorded by the process API</h2>
+    <h2>Run history, newest first</h2>
     <div id="runs" class="empty">Process API not reachable.</div>
   </aside>
 </main>
 <script>
-const W = 216, H = 86;
+const W = 216, H = 104;
 const ZONES = [
   { id: 'sf', label: 'Salesforce', x: 30, y: 40, w: 300, h: 640, fill: 'var(--sf)', stroke: 'var(--sf-line)' },
   { id: 'mule', label: 'MuleSoft (local Mule runtime)', x: 380, y: 40, w: 620, h: 640, fill: 'var(--mule)', stroke: 'var(--mule-line)' },
@@ -204,6 +208,18 @@ let state = null, selected = null, view = { x: 0, y: 0, k: 1 };   // selected: {
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = (v) => (v === null || v === undefined ? '–' : v);
 
+const STATUS_ORDER = [['open', 'open'], ['partpaid', 'part paid'], ['paid', 'paid'], ['void', 'void']];
+function statusLine(byStatus) {
+  if (!byStatus) return '';
+  const norm = {};
+  for (const [k, v] of Object.entries(byStatus)) norm[k.toLowerCase().replace(/[^a-z]/g, '')] = v;
+  return STATUS_ORDER.filter(([k]) => norm[k]).map(([k, label]) => `${norm[k]} ${label}`).join(' · ');
+}
+function fileList(files, emptyText) {
+  if (!files || !files.length) return `<p class="empty" style="margin:0">${esc(emptyText)}</p>`;
+  return `<ul class="files">${files.map((f) => `<li><span>${esc(f.name)}</span><span class="when">${esc(ago(f.modified))} · ${f.size} B</span></li>`).join('')}</ul>`;
+}
+
 // What each component looks like right now: status, the lines on its card, and its details.
 function describe(id, s) {
   const a = s.apis, f = s.finance, sf = s.salesforce || {}, c = s.containers || {}, links = sf.links || {};
@@ -213,11 +229,11 @@ function describe(id, s) {
     facts: [['Address', x.url], ['Health', x.detail]].concat(backendLabel && x.backendUp !== null ? [[backendLabel, x.backendUp ? 'Reachable' : 'Unreachable']] : []),
   });
   switch (id) {
-    case 'accounts': return { status: sf.accounts == null ? 'unknown' : 'up', lines: [`${num(sf.accounts)} records`],
+    case 'accounts': return { status: sf.accounts == null ? 'unknown' : 'up', lines: [`${num(sf.accounts)} records`, `${num(f.customersLinked)} of ${num(f.customers)} finance customers linked`],
       facts: [['Accounts in Salesforce', num(sf.accounts)], ['Finance customers linked', `${num(f.customersLinked)} of ${num(f.customers)}`]], link: links.accounts, linkText: 'Open Accounts in Salesforce' };
     case 'cdc': return { status: a.sfdc.up ? 'up' : 'unknown', lines: [a.sfdc.up ? 'Subscribed' : 'Listener not running'],
       facts: [['Channel', '/data/AccountChangeEvent'], ['Subscriber', 'sfdc-sys-api'], ['Replay', 'Resumes from last event']], link: links.changeDataCapture, linkText: 'Open Change Data Capture setup' };
-    case 'sfInvoices': return { status: sf.invoices == null ? 'unknown' : 'up', lines: [`${num(sf.invoices)} records`],
+    case 'sfInvoices': return { status: sf.invoices == null ? 'unknown' : 'up', lines: [`${num(sf.invoices)} records`, statusLine(sf.invoicesByStatus)],
       facts: [['Invoices in Salesforce', num(sf.invoices)], ['Invoices in finance', num(f.invoices)], ['Upsert key', 'Invoice_Number__c']], link: links.invoices, linkText: 'Open All Invoices in Salesforce' };
     case 'eca': return { status: a.sfdc.backendUp ? 'up' : (a.sfdc.reachable ? 'down' : 'unknown'), lines: [a.sfdc.backendUp ? 'Login working' : 'Login not confirmed'],
       facts: [['Flow', 'OAuth 2.0 JWT bearer'], ['Permitted users', 'Admin approved'], ['Permission set', 'Finance Integration']], link: links.externalClientApp, linkText: 'Open External Client App Manager' };
@@ -226,10 +242,10 @@ function describe(id, s) {
     case 'finance': { const d = api(a.finance, 'Database'); d.note = 'Wraps the Oracle schema and its stored procedures.'; return d; }
     case 'paymentsFile': { const d = api(a.paymentsFile, 'SFTP server'); d.facts.push(['Watches', '/payments/inbound, every 15 seconds']); d.note = 'Wraps the SFTP feed: picks up payment files, hands them to the process API, archives them and writes a rejects file.'; return d; }
     case 'oracle': { const up = c['finance-db'] && c['finance-db'].up; return { status: c['finance-db'] ? (up && a.finance.backendUp !== false ? 'up' : 'down') : 'unknown',
-      lines: [`${num(f.customers)} customers · ${num(f.invoices)} invoices`],
+      lines: [`${num(f.customers)} customers · ${num(f.invoices)} invoices`, statusLine(f.invoicesByStatus)],
       facts: [['Container', c['finance-db'] ? c['finance-db'].status : 'Unknown'], ['Customers', num(f.customers)], ['Linked to Salesforce', num(f.customersLinked)], ['Invoices', num(f.invoices)],
         ...Object.entries(f.invoicesByStatus || {}).map(([k, v]) => [`Invoices ${k}`, v])] }; }
-    case 'sftp': { const up = c['legacy-sftp'] && c['legacy-sftp'].up; return { status: c['legacy-sftp'] ? (up ? 'up' : 'down') : 'unknown', lines: [`${num(s.sftp.inbound)} file(s) in inbound`],
+    case 'sftp': { const up = c['legacy-sftp'] && c['legacy-sftp'].up; return { status: c['legacy-sftp'] ? (up ? 'up' : 'down') : 'unknown', lines: [`${num(s.sftp.inbound)} waiting in inbound`, `${num(s.sftp.archive)} archived · ${num(s.sftp.error)} rejects file(s)`], files: s.sftp.files,
       facts: [['Container', c['legacy-sftp'] ? c['legacy-sftp'].status : 'Unknown'], ['Inbound', num(s.sftp.inbound)], ['Archive', num(s.sftp.archive)], ['Error', num(s.sftp.error)]] }; }
   }
 }
@@ -340,6 +356,7 @@ function render() {
       `<text class="title" x="${n.x + 30}" y="${n.y + 25}">${esc(n.title)}</text>` +
       `<text class="sub" x="${n.x + 14}" y="${n.y + 46}">${esc(n.sub)}</text>` +
       `<text class="metric" x="${n.x + 14}" y="${n.y + 68}">${esc(d.lines[0])}</text>` +
+      (d.lines[1] ? `<text class="metric2" x="${n.x + 14}" y="${n.y + 88}">${esc(d.lines[1])}</text>` : '') +
       (LOG_COMPONENTS[n.id] ? badge(n.x + W - 6, n.y + 4, counts(issues.components[n.id])) : '') + `</g>`;
   }
   const world = document.getElementById('world');
@@ -408,6 +425,10 @@ function renderDetail(info, byId, issues) {
         const rej = recordRejections();
         html += `<details class="section" data-k="refused"><summary>Records refused in the last runs <span class="n">(${rej.length})</span></summary>` + (rej.length ? `<ul style="margin:0;padding-left:18px">${rej.map((x) => `<li>${x}</li>`).join('')}</ul>` : `<p class="empty" style="margin:0">None.</p>`) + `</details>`;
       }
+    } else if (d.files) {
+      html += `<details class="section" data-k="f-inbound" open><summary>Waiting in inbound <span class="n">(${d.files.inbound.length})</span></summary>` + fileList(d.files.inbound, 'Nothing waiting.') + `</details>` +
+        `<details class="section" data-k="f-archive" open><summary>Archive, newest first <span class="n">(${d.files.archive.length})</span></summary>` + fileList(d.files.archive, 'Nothing processed yet.') + `</details>` +
+        `<details class="section" data-k="f-error" open><summary>Rejects files <span class="n">(${d.files.error.length})</span></summary>` + fileList(d.files.error, 'No file has had rejected rows.') + `</details>`;
     } else {
       html += `<p class="meta" style="color:var(--muted);margin:10px 0 0">This component has no log the dashboard can read. Errors reaching it show on its connections.</p>`;
     }
@@ -425,10 +446,15 @@ function chips(obj) {
 
 function renderRuns() {
   const el = document.getElementById('runs');
-  const runs = state.runs && Object.entries(state.runs).filter(([, v]) => v);
-  if (!runs || !runs.length) return setHtml(el, state.runs ? 'No runs recorded yet.' : 'Process API not reachable.', 'empty');
-  setHtml(el, runs.map(([k, v]) => `<div class="card"><div class="head"><span>${esc(RUN_LABELS[k] || k)}</span></div><div class="chips">${chips(v)}</div>` +
-    `<details data-k="run-${esc(k)}"><summary>Full record</summary><pre>${esc(JSON.stringify(v, null, 2))}</pre></details></div>`).join(''));
+  if (!state.runs) return setHtml(el, 'Process API not reachable.', 'empty');
+  // Prefer the history. Fall back to the last run of each flow if it is empty.
+  const entries = state.history && state.history.length
+    ? state.history.map((h) => ({ key: h.flow, at: h.recordedAt, run: h.run, id: `${h.flow}-${h.recordedAt}` }))
+    : Object.entries(state.runs).filter(([, v]) => v).map(([k, v]) => ({ key: k, at: v.finishedAt || v.processedAt || v.checkedAt, run: v, id: k }));
+  if (!entries.length) return setHtml(el, 'No runs recorded yet.', 'empty');
+  setHtml(el, entries.map((e) => `<div class="card"><div class="head"><span>${esc(RUN_LABELS[e.key] || e.key)}${e.run.fileName ? ' · ' + esc(e.run.fileName) : ''}</span><span class="when">${e.at ? esc(ago(e.at)) : ''}</span></div>` +
+    `<div class="chips">${chips(e.run)}</div>` +
+    `<details data-k="run-${esc(e.id)}"><summary>Full record</summary><pre>${esc(JSON.stringify(e.run, null, 2))}</pre></details></div>`).join(''));
 }
 
 const activity = [];

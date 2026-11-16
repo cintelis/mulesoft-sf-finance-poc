@@ -37,6 +37,14 @@ fun run(key) = if (payload[key] == null) null else parse(payload[key])
     </ee:transform>
   </flow>
 
+  <!-- GET /status/history : the last 50 runs that did something, newest first -->
+  <flow name="get:\status\history:customer-sync-prc-api-config" doc:name="Run history">
+    <os:retrieve key="history" objectStore="status-store" doc:name="Read history">
+      <os:default-value>#['[]']</os:default-value>
+    </os:retrieve>
+    <set-payload value="#[output application/json --- read(payload as String, 'application/json')]" doc:name="History"/>
+  </flow>
+
   <!-- GET /health : this API is healthy only when both system APIs are -->
   <flow name="get:\health:customer-sync-prc-api-config" doc:name="Health">
     <try doc:name="Try finance">

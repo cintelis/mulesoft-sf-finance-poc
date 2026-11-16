@@ -3,11 +3,13 @@
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:http="http://www.mulesoft.org/schema/mule/http"
       xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
       xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
-        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
 
   <!-- One way to call each system API, used by every flow.
 
@@ -53,5 +55,33 @@
     <os:store key="#[vars.statusKey]" objectStore="status-store" doc:name="Store last run">
       <os:value>#[output application/java --- write(payload, 'application/json')]</os:value>
     </os:store>
+    <!-- Keep a history too, newest first. Routine runs that found nothing (the
+         scheduled sync, or the sync that follows a payments file) are left out
+         so they do not bury the runs that did something. -->
+    <choice doc:name="Worth keeping in history?">
+      <when expression="#[output application/java --- not (vars.statusKey == 'invoiceSync' and (payload.trigger default 'request') != 'request' and (payload.invoicesRead default 0) == 0)]">
+        <os:retrieve key="history" objectStore="status-store" target="historyJson" doc:name="Read history">
+          <os:default-value>#['[]']</os:default-value>
+        </os:retrieve>
+        <ee:transform doc:name="Add this run">
+          <ee:variables>
+            <ee:set-variable variableName="newHistory"><![CDATA[%dw 2.0
+import take from dw::core::Arrays
+output application/java
+var entry = {
+  flow: vars.statusKey,
+  recordedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"},
+  correlationId: correlationId,
+  run: payload
+}
+---
+write(take([entry] ++ read(vars.historyJson as String, "application/json"), 50), "application/json")]]></ee:set-variable>
+          </ee:variables>
+        </ee:transform>
+        <os:store key="history" objectStore="status-store" doc:name="Store history">
+          <os:value>#[vars.newHistory]</os:value>
+        </os:store>
+      </when>
+    </choice>
   </sub-flow>
 </mule>

@@ -77,6 +77,15 @@ traits:
       200:
         body: RunSummary
 
+/status/history:
+  get:
+    description: |
+      The last 50 runs, newest first. Scheduled invoice syncs that found nothing
+      to send are left out.
+    responses:
+      200:
+        body: RunSummary[]
+
 /account-events:
   post:
     is: [hasErrors]
