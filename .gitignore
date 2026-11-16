@@ -24,3 +24,7 @@ target/
 *.iml
 .DS_Store
 Thumbs.db
+
+# Salesforce CLI local state
+.sf/
+.sfdx/
