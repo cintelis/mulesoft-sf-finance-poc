@@ -25,7 +25,7 @@
          display: grid; grid-template-rows: auto 1fr; }
   header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
   header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 650; }
-  #stamp { color: var(--muted); font-size: 12px; margin-right: auto; }
+  #stamp { color: var(--muted); font-size: 12px; }
   button, select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px; cursor: pointer; }
   button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   button:disabled { opacity: .45; cursor: not-allowed; }
@@ -78,7 +78,14 @@
   .ctl .buttons { display: flex; gap: 5px; }
   .ctl button, .appctl button { padding: 3px 9px; font-size: 12.5px; }
   .appctl { display: flex; gap: 5px; margin: 10px 0 0; align-items: center; flex-wrap: wrap; }
-  #control-msg { color: var(--muted); font-size: 12.5px; min-height: 18px; margin: 2px 0 0; }
+  #control-msg { color: var(--accent); font-size: 12.5px; margin-right: auto; }
+  .zbtn { cursor: pointer; }
+  .zbtn rect { fill: var(--panel); stroke: var(--line); }
+  .zbtn text { font-size: 11.5px; fill: var(--ink); text-anchor: middle; pointer-events: none; }
+  .zbtn:hover rect, .zbtn:focus-visible rect { stroke: var(--accent); }
+  .zbtn:hover text { fill: var(--accent); }
+  .zone-state { font-size: 12px; }
+  .zone-state.up { fill: var(--up); } .zone-state.down { fill: var(--down); } .zone-state.unknown { fill: var(--warn); }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
@@ -101,6 +108,7 @@
 <header>
   <h1>Salesforce to finance integration</h1>
   <span id="stamp">Loading…</span>
+  <span id="control-msg" role="status"></span>
   <button data-action="migrate-customers" title="Create Salesforce Accounts for finance customers that have none, then link them">Migrate customers</button>
   <button data-action="sync-invoices" title="Send invoices changed since the watermark to Salesforce">Sync invoices</button>
   <button data-action="sync-invoices-full" title="Send every invoice again. Safe: the upsert is idempotent">Full resync</button>
@@ -123,12 +131,6 @@
   </div>
   <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize the details panel" tabindex="0" title="Drag to resize. Double-click to reset."></div>
   <aside id="side-panel">
-    <h2>Controls</h2>
-    <div class="ctl"><span>Mule runtime <span class="pill unknown" id="runtime-pill">Checking</span></span>
-      <span class="buttons"><button data-control="runtime/start">Start</button><button data-control="runtime/stop">Stop</button><button data-control="runtime/restart">Restart</button></span></div>
-    <div class="ctl"><span>Docker systems <span class="pill unknown" id="docker-pill">Checking</span></span>
-      <span class="buttons"><button data-control="docker/start">Start</button><button data-control="docker/stop">Stop</button><button data-control="docker/restart">Restart</button></span></div>
-    <p id="control-msg" role="status"></p>
     <h2>Selected component or connection</h2>
     <div id="detail" class="empty">Click a component or a connection line on the canvas.</div>
     <details class="section top" id="activity-section"><summary>Activity this session <span class="n" id="activity-count">(0)</span></summary>
@@ -262,6 +264,30 @@ function setHtml(el, html, className) {
   el.querySelectorAll('details').forEach((d) => { if (open.has(d.dataset.k)) d.open = true; });
 }
 
+// Start / Stop / Restart for the thing a zone runs on, with its current state.
+function zoneControls(z) {
+  let target, label, cls, text;
+  if (z.id === 'mule') {
+    const up = ['finance', 'sfdc', 'prc'].filter((k) => state.apis[k].reachable).length;
+    target = 'runtime'; label = 'Mule runtime';
+    cls = up === 3 ? 'up' : up ? 'unknown' : 'down';
+    text = up === 3 ? 'running' : up ? `${up} of 3 apps up` : 'stopped';
+  } else if (z.id === 'prem') {
+    const cs = state.containers ? Object.values(state.containers) : null, up = cs ? cs.filter((c) => c.up).length : 0;
+    target = 'docker'; label = 'Docker containers';
+    cls = !cs ? 'unknown' : up === 2 ? 'up' : up ? 'unknown' : 'down';
+    text = !cs ? 'state unknown' : up === 2 ? 'running' : up ? `${up} of 2 up` : 'stopped';
+  } else return '';
+  const y = z.y + z.h - 34;
+  let out = `<text class="zone-state ${cls}" x="${z.x + 14}" y="${y - 9}">${esc(label)}: ${esc(text)}</text>`;
+  ['Start', 'Stop', 'Restart'].forEach((name, i) => {
+    const w = name === 'Restart' ? 58 : 46, x = z.x + z.w - 14 - [162, 110, 58][i];
+    out += `<g class="zbtn" data-control="${target}/${name.toLowerCase()}" tabindex="0" role="button" aria-label="${name} ${esc(label)}"><title>${name} ${esc(label)}</title>` +
+      `<rect x="${x}" y="${y}" width="${w}" height="24" rx="5"/><text x="${x + w / 2}" y="${y + 16}">${name}</text></g>`;
+  });
+  return out;
+}
+
 function render() {
   if (!state) return;
   const info = Object.fromEntries(NODES.map((n) => [n.id, describe(n.id, state)]));
@@ -270,7 +296,7 @@ function render() {
   let out = '';
   for (const z of ZONES) {
     out += `<rect class="zone" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="10" fill="${z.fill}" stroke="${z.stroke}"/>` +
-           `<text class="zone-title" x="${z.x + 14}" y="${z.y + 24}">${esc(z.label)}</text>`;
+           `<text class="zone-title" x="${z.x + 14}" y="${z.y + 24}">${esc(z.label)}</text>` + zoneControls(z);
   }
   for (const e of EDGES) {
     const id = `${e.from}>${e.to}`, A = byId[e.from], B = byId[e.to], p = anchor(A, B, e.a), q = anchor(B, A, e.b);
@@ -299,14 +325,6 @@ function render() {
   document.getElementById('stamp').textContent = 'Updated ' + new Date(state.at).toLocaleTimeString();
   renderDetail(info, byId, issues);
   renderRuns();
-  const running = ['finance', 'sfdc', 'prc'].filter((k) => state.apis[k].reachable).length;
-  const rt = document.getElementById('runtime-pill');
-  rt.className = 'pill ' + (running === 3 ? 'up' : running ? 'unknown' : 'down');
-  rt.textContent = running === 3 ? 'Running' : running ? `${running} of 3 apps up` : 'Stopped';
-  const cs = state.containers ? Object.values(state.containers) : null, dk = document.getElementById('docker-pill');
-  const dUp = cs ? cs.filter((c) => c.up).length : 0;
-  dk.className = 'pill ' + (!cs ? 'unknown' : dUp === 2 ? 'up' : dUp ? 'unknown' : 'down');
-  dk.textContent = !cs ? 'Unknown' : dUp === 2 ? 'Running' : dUp ? `${dUp} of 2 up` : 'Stopped';
   const prcUp = state.apis.prc.up;
   document.querySelectorAll('button[data-action]').forEach((b) => {
     if (!b.classList.contains('busy')) { b.disabled = !prcUp; b.title = prcUp ? b.dataset.tip || b.title : 'The process API is not running'; }
@@ -428,8 +446,8 @@ document.querySelectorAll('button[data-action]').forEach((button) => {
 // Start, stop and restart buttons (runtime, Docker systems, or one app).
 const CONTROL_NAMES = { runtime: 'Mule runtime', docker: 'Docker systems', finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api' };
 document.addEventListener('click', async (e) => {
-  const button = e.target.closest('button[data-control]');
-  if (!button || button.disabled) return;
+  const button = e.target.closest('[data-control]');
+  if (!button || button.disabled || moved) return;
   const [target, operation] = button.dataset.control.split('/'), msg = document.getElementById('control-msg');
   button.disabled = true;
   msg.textContent = `${CONTROL_NAMES[target]}: ${operation} requested…`;
@@ -451,7 +469,12 @@ function pick(target) {
   render();
 }
 world.addEventListener('click', (e) => { if (!moved) pick(e.target); });
-world.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(e.target); } });
+world.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  e.preventDefault();
+  const control = e.target.closest('[data-control]');
+  if (control) control.dispatchEvent(new MouseEvent('click', { bubbles: true })); else pick(e.target);
+});
 
 // Pan and zoom.
 let drag = null, moved = false;

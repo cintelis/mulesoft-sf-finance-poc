@@ -231,7 +231,13 @@ async function loadState() {
     reachable: result.status !== 0,
     up: result.ok && result.body && result.body.status === 'UP',
     backendUp: result.body && backend ? result.body[backend] === 'UP' : null,
-    detail: result.status === 0 ? 'Not running' : (result.body && result.body.status) || `HTTP ${result.status}`,
+    // Say what is actually wrong: the app is absent, it is hanging, or it is up
+    // but cannot reach the system behind it.
+    detail: result.status === 0
+      ? (result.error === 'ECONNREFUSED' ? 'Not running' : 'Not responding (timed out)')
+      : result.body && result.body.status === 'DOWN' && backend
+        ? `Running, but ${backend} is unreachable`
+        : (result.body && result.body.status) || `HTTP ${result.status}`,
   });
 
   return {
