@@ -401,7 +401,7 @@ function renderDetail(info, byId, issues) {
       `<dl class="kv">${d.facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` +
       (d.link ? `<p style="margin:10px 0 0"><a href="${esc(d.link)}" target="_blank" rel="noopener">${esc(d.linkText)}</a></p>` : '');
     if (LOG_COMPONENTS[selected.id]) {
-      html += `<div class="appctl"><span style="color:var(--muted)">This app:</span>${['start', 'stop', 'restart'].map((op) => `<button class="icon-only" data-control="${selected.id}/${op}" title="${op[0].toUpperCase() + op.slice(1)} this app" aria-label="${op[0].toUpperCase() + op.slice(1)} this app">${icon(CONTROL_ICONS[op])}</button>`).join('')}</div>`;
+      html += `<div class="appctl">${['start', 'stop', 'restart'].map((op) => `<button class="icon-only" data-control="${selected.id}/${op}" title="${op[0].toUpperCase() + op.slice(1)} this app" aria-label="${op[0].toUpperCase() + op.slice(1)} this app">${icon(CONTROL_ICONS[op])}</button>`).join('')}</div>`;
       const own = issues.components[selected.id] || [];
       html += `<details class="section" data-k="issues"><summary>Errors and rejected requests <span class="n">(${own.length})</span></summary>` + issueList(own, 'None found in this app’s log.') + `</details>`;
       if (selected.id === 'prc') {
