@@ -26,6 +26,10 @@
   header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
   header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 650; }
   #stamp { color: var(--muted); font-size: 12px; }
+  nav { display: flex; gap: 4px; }
+  nav a { padding: 5px 11px; border-radius: 6px; color: var(--muted); text-decoration: none; border: 1px solid transparent; }
+  nav a:hover { color: var(--accent); }
+  nav a[aria-current="page"] { color: var(--ink); border-color: var(--line); background: var(--bg); font-weight: 600; }
   button, select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px; cursor: pointer; }
   button { display: inline-flex; align-items: center; gap: 6px; }
   .ico { flex: none; }
@@ -116,6 +120,10 @@
 <body>
 <header>
   <h1>Salesforce to finance integration</h1>
+  <nav aria-label="Dashboard pages">
+    <a href="/" aria-current="page">Overview</a>
+    <a href="/mappings">Mappings</a>
+  </nav>
   <span id="stamp">Loading…</span>
   <span id="control-msg" role="status"></span>
   <button data-action="migrate-customers" title="Create Salesforce Accounts for finance customers that have none, then link them"><span data-icon="user-plus"></span><span class="lbl">Migrate customers</span></button>

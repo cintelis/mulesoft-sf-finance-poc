@@ -136,6 +136,7 @@ button for each flow.
 .\scripts\start-dashboard.ps1     # starts it in its own window and opens http://localhost:8090
 ```
 
+- **Mappings** (http://localhost:8090/mappings) shows each DataWeave mapping as sample input, script and output side by side. The input is editable, and the output comes from the real mapping running on the Mule engine.
 - Click a component or a connection line for details, errors and rejected requests.
 - The flow buttons call the process API: migrate customers, sync invoices, reconcile, process a sample payments file.
 - **Controls** start, stop and restart the Mule runtime, a single app, or the Docker systems. Starting the runtime opens a minimised window; closing that window stops it.

@@ -86,6 +86,26 @@ traits:
       200:
         body: RunSummary[]
 
+/mappings/{name}/preview:
+  uriParameters:
+    name:
+      type: string
+      enum: [payment-rows, account-to-customer, customers-to-accounts, invoices-to-salesforce, reconciliation-report, customer-hash]
+  post:
+    is: [hasErrors]
+    description: |
+      Runs one DataWeave mapping on the input sent and returns the result. Calls
+      no system API and changes no data. For demonstrations and sample data.
+    body:
+      type: object
+      properties:
+        input:
+          type: any
+          description: A CSV string for payment-rows; JSON for the others.
+    responses:
+      200:
+        body: any
+
 /account-events:
   post:
     is: [hasErrors]

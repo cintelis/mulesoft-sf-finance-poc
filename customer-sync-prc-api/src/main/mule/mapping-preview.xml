@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- POST /mappings/{name}/preview
+
+       Runs one of this API's DataWeave mappings on the input you send and
+       returns the result. It calls no system API and changes no data. It uses
+       the same .dwl files as the real flows, so what it shows is what the
+       flows do. Meant for demonstrations and for trying out sample data. -->
+  <flow name="post:\mappings\(name)\preview:application\json:customer-sync-prc-api-config" doc:name="Preview a mapping">
+    <set-variable variableName="mapping" value="#[attributes.uriParams.name]" doc:name="Mapping name"/>
+    <set-variable variableName="sample" value="#[output application/java --- payload['input']]" doc:name="Sample input"/>
+    <choice doc:name="Which mapping?">
+      <when expression="#[vars.mapping == 'payment-rows']">
+        <set-variable variableName="csvRows" value="#[output application/java --- read(vars.sample as String, 'application/csv')]" doc:name="Parse CSV"/>
+        <set-variable variableName="fileName" value="preview.csv" doc:name="File name"/>
+        <ee:transform doc:name="payment-rows.dwl">
+          <ee:message>
+            <ee:set-payload resource="dw/payment-rows.dwl"/>
+          </ee:message>
+        </ee:transform>
+        <set-payload value="#[output application/json --- payload]" doc:name="As JSON"/>
+      </when>
+      <when expression="#[vars.mapping == 'account-to-customer']">
+        <set-variable variableName="account" value="#[vars.sample]" doc:name="Account"/>
+        <ee:transform doc:name="account-to-customer.dwl">
+          <ee:message>
+            <ee:set-payload resource="dw/account-to-customer.dwl"/>
+          </ee:message>
+        </ee:transform>
+      </when>
+      <when expression="#[vars.mapping == 'customers-to-accounts']">
+        <set-variable variableName="customers" value="#[vars.sample]" doc:name="Customers"/>
+        <ee:transform doc:name="customers-to-accounts.dwl">
+          <ee:message>
+            <ee:set-payload resource="dw/customers-to-accounts.dwl"/>
+          </ee:message>
+        </ee:transform>
+      </when>
+      <when expression="#[vars.mapping == 'invoices-to-salesforce']">
+        <set-variable variableName="page" value="#[{ items: vars.sample }]" doc:name="Invoices"/>
+        <ee:transform doc:name="invoices-to-salesforce.dwl">
+          <ee:message>
+            <ee:set-payload resource="dw/invoices-to-salesforce.dwl"/>
+          </ee:message>
+        </ee:transform>
+      </when>
+      <when expression="#[vars.mapping == 'reconciliation-report']">
+        <set-variable variableName="financeRecon" value="#[{ items: vars.sample.finance }]" doc:name="Finance side"/>
+        <set-variable variableName="accounts" value="#[{ items: vars.sample.salesforce }]" doc:name="Salesforce side"/>
+        <ee:transform doc:name="reconciliation-report.dwl">
+          <ee:message>
+            <ee:set-payload resource="dw/reconciliation-report.dwl"/>
+          </ee:message>
+        </ee:transform>
+      </when>
+      <when expression="#[vars.mapping == 'customer-hash']">
+        <ee:transform doc:name="Recon.dwl">
+          <ee:message>
+            <ee:set-payload><![CDATA[%dw 2.0
+import customerHash from modules::Recon
+import * from modules::Lookups
+output application/json
+var account = vars.sample
+---
+{
+  textThatIsHashed: [
+    upper(text(account.name)),
+    digitsOnly(account.abn) default "",
+    lower(text(account.email)),
+    text(account.billingPostalCode),
+    toFinanceStatus(account.status)
+  ] joinBy "|",
+  sha256: customerHash(account)
+}]]></ee:set-payload>
+          </ee:message>
+        </ee:transform>
+      </when>
+      <otherwise>
+        <raise-error type="APP:NOT_FOUND" description="#['No mapping named ' ++ vars.mapping]" doc:name="Unknown mapping"/>
+      </otherwise>
+    </choice>
+  </flow>
+</mule>

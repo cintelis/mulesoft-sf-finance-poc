@@ -412,6 +412,72 @@ for (const id of Object.keys(APP_FOLDERS)) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Mappings: each DataWeave mapping in the process API, with its script, a
+// sample input taken from live data where possible, and a way to run it.
+// The run goes to the process API's preview endpoint, so the output comes
+// from the real .dwl file on the real Mule engine. Nothing is written.
+// ---------------------------------------------------------------------------
+const PRC_RESOURCES = path.join(REPO, 'customer-sync-prc-api', 'src', 'main', 'resources');
+const MAPPINGS = [
+  { id: 'payment-rows', title: 'Payments CSV to finance payments', direction: 'Legacy file to finance',
+    file: 'dw/payment-rows.dwl', uses: [], inputType: 'csv',
+    summary: 'Validates and converts each row of the nightly file. Dates arrive as DD/MM/YYYY and amounts as "1,375.00". Every row comes back with any reasons it was rejected.',
+    tryThis: 'Change a date to 31/02/2026, blank out an amount, or set a method to CASH, then run again.' },
+  { id: 'account-to-customer', title: 'Salesforce Account to finance customer', direction: 'Salesforce to finance',
+    file: 'dw/account-to-customer.dwl', uses: ['modules/Lookups.dwl'], inputType: 'json',
+    summary: 'Renames fields and translates vocabulary: the state name becomes a code, the status picklist becomes the finance status, and the ABN loses its spaces.',
+    tryThis: 'Set billingState to "victoria" or "QLD", or status to "On Hold", then run again.' },
+  { id: 'customers-to-accounts', title: 'Finance customers to Salesforce Accounts', direction: 'Finance to Salesforce',
+    file: 'dw/customers-to-accounts.dwl', uses: ['modules/Lookups.dwl'], inputType: 'json',
+    summary: 'The reverse mapping, used by the one-off migration. State codes become full names because this Salesforce org uses state picklists.',
+    tryThis: 'Change a state to "TAS" or a status to "CLOSED", then run again.' },
+  { id: 'invoices-to-salesforce', title: 'Finance invoices to Salesforce invoices', direction: 'Finance to Salesforce',
+    file: 'dw/invoices-to-salesforce.dwl', uses: ['modules/Lookups.dwl'], inputType: 'json',
+    summary: 'Maps each invoice for the upsert. Fields with no value are left out, so an invoice whose customer is not yet in Salesforce is sent without an Account.',
+    tryThis: 'Set sfAccountId to null on one invoice and watch the field disappear from the output.' },
+  { id: 'customer-hash', title: 'Reconciliation hash for one customer', direction: 'Salesforce to hash',
+    file: 'modules/Recon.dwl', uses: ['modules/Lookups.dwl'], inputType: 'json',
+    summary: 'Builds the same SHA-256 hash that the Oracle view v_customer_recon builds in PL/SQL. Equal hashes mean the synced fields agree.',
+    tryThis: 'Change one letter of the name and the hash changes completely.' },
+  { id: 'reconciliation-report', title: 'Reconciliation report', direction: 'Both systems to report',
+    file: 'dw/reconciliation-report.dwl', uses: ['modules/Recon.dwl', 'modules/Lookups.dwl'], inputType: 'json',
+    summary: 'Joins the two sides by Salesforce ID and sorts every customer into matched, mismatched, or present on one side only.',
+    tryThis: 'Change a name on the Salesforce side, or delete an entry from either side, then run again.' },
+];
+
+const readResource = (file) => { try { return fs.readFileSync(path.join(PRC_RESOURCES, file), 'utf8'); } catch { return ''; } };
+
+async function sampleFor(id) {
+  if (id === 'payment-rows') {
+    try { return fs.readFileSync(path.join(REPO, 'samples', 'payments', 'payments_20261117_bad.csv'), 'utf8'); }
+    catch { return 'PAYMENT_REF,INVOICE_NO,AMOUNT,CCY,PAY_DATE,METHOD,PAYER\n'; }
+  }
+  const accounts = async () => { const r = await call(APIS.sfdc + '/accounts?limit=3', { timeout: 20000 }); return r.ok ? r.body.items : null; };
+  const fallbackAccount = { id: '001000000000000AAA', name: 'Harbour City Plumbing Pty Ltd', abn: '51 824 753 556', email: 'Accounts@HarbourCity.example',
+    phone: '02 5550 1001', billingStreet: '12 Wharf Rd', billingCity: 'Balmain', billingState: 'New South Wales', billingPostalCode: '2041', status: 'Active', creditLimit: 25000 };
+  if (id === 'account-to-customer' || id === 'customer-hash') { const a = await accounts(); return a && a[0] ? a[0] : fallbackAccount; }
+  if (id === 'customers-to-accounts') { const r = await call(APIS.finance + '/customers'); return r.ok ? r.body.items.slice(0, 2) : []; }
+  if (id === 'invoices-to-salesforce') { const r = await call(APIS.finance + '/invoices?limit=1000'); return r.ok ? r.body.items.slice(0, 3) : []; }
+  if (id === 'reconciliation-report') {
+    const [fin, sf] = await Promise.all([call(APIS.finance + '/recon/customers'), accounts()]);
+    const salesforce = sf || [fallbackAccount];
+    const ids = salesforce.map((a) => a.id);
+    return { finance: fin.ok ? fin.body.items.filter((x) => ids.includes(x.sfAccountId)) : [], salesforce };
+  }
+  return null;
+}
+
+async function loadMappings() {
+  return Promise.all(MAPPINGS.map(async (m) => ({
+    ...m,
+    path: 'customer-sync-prc-api/src/main/resources/' + m.file,
+    script: readResource(m.file),
+    modules: m.uses.map((f) => ({ file: f, script: readResource(f) })),
+    sample: await sampleFor(m.id),
+  })));
+}
+
 function send(res, status, body, type = 'application/json') {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -432,6 +498,21 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && url.pathname === '/') {
       return send(res, 200, fs.readFileSync(path.join(__dirname, 'index.html')), 'text/html; charset=utf-8');
+    }
+    if (req.method === 'GET' && url.pathname === '/mappings') {
+      return send(res, 200, fs.readFileSync(path.join(__dirname, 'mappings.html')), 'text/html; charset=utf-8');
+    }
+    if (req.method === 'GET' && url.pathname === '/api/mappings') {
+      return send(res, 200, await loadMappings());
+    }
+    const runMapping = url.pathname.match(/^\/api\/mappings\/([a-z-]+)\/run$/);
+    if (req.method === 'POST' && runMapping && MAPPINGS.some((m) => m.id === runMapping[1])) {
+      const started = Date.now();
+      const body = await readBody(req);
+      const result = await call(APIS.prc + '/mappings/' + runMapping[1] + '/preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: body.input }), timeout: 30000,
+      });
+      return send(res, 200, { ms: Date.now() - started, ...result });
     }
     if (req.method === 'GET' && url.pathname === '/api/state') {
       return send(res, 200, await loadState());

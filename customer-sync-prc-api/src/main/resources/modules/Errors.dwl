@@ -12,6 +12,8 @@ var byType = {
   "APIKIT:NOT_ACCEPTABLE":         { status: 406, code: "NOT_ACCEPTABLE" },
   "APIKIT:UNSUPPORTED_MEDIA_TYPE": { status: 415, code: "UNSUPPORTED_MEDIA_TYPE" },
   "APP:BAD_FILE":                  { status: 400, code: "BAD_FILE" },
+  "APP:NOT_FOUND":                 { status: 404, code: "NOT_FOUND" },
+  "MULE:EXPRESSION":               { status: 400, code: "MAPPING_FAILED" },
   "APP:UPSTREAM_REJECTED":         { status: 502, code: "UPSTREAM_REJECTED" },
   "MULE:RETRY_EXHAUSTED":          unavailable,
   "HTTP:CONNECTIVITY":             unavailable,
