@@ -301,10 +301,10 @@ function zoneControls(z) {
     text = !cs ? 'state unknown' : up === 2 ? 'running' : up ? `${up} of 2 up` : 'stopped';
   } else return '';
   const y = z.y + z.h - 34;
-  let out = `<text class="zone-state ${cls}" x="${z.x + 14}" y="${y - 9}">${esc(label)}: ${esc(text)}</text>`;
+  let out = '';
   ['Start', 'Stop', 'Restart'].forEach((name, i) => {
     const w = 30, x = z.x + z.w - 14 - [102, 66, 30][i];
-    out += `<g class="zbtn" data-control="${target}/${name.toLowerCase()}" tabindex="0" role="button" aria-label="${name} ${esc(label)}"><title>${name} ${esc(label)}</title>` +
+    out += `<g class="zbtn" data-control="${target}/${name.toLowerCase()}" tabindex="0" role="button" aria-label="${name} ${esc(label)}"><title>${name} ${esc(label)} (currently ${esc(text)})</title>` +
       `<rect x="${x}" y="${y}" width="${w}" height="24" rx="5"/><svg x="${x + 8}" y="${y + 5}" width="14" height="14" ${ICON_ATTRS}>${ICONS[CONTROL_ICONS[name.toLowerCase()]]}</svg></g>`;
   });
   return out;
