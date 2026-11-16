@@ -31,3 +31,8 @@ Thumbs.db
 
 # Per-app local files: keystores, exported certificates, env files
 **/local/
+
+# Salesforce External Client App metadata retrieved from an org.
+# It is org-specific and includes the app's consumer key and certificate.
+salesforce/force-app/main/default/externalClientApps/
+salesforce/force-app/main/default/extlClntApp*/

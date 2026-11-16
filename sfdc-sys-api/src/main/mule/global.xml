@@ -22,6 +22,7 @@
   <global-property name="SFDC_USERNAME" value="not-set" doc:name="Username fallback"/>
   <global-property name="SFDC_KEYSTORE_PATH" value="not-set" doc:name="Keystore path fallback"/>
   <global-property name="SFDC_KEYSTORE_PASSWORD" value="not-set" doc:name="Keystore password fallback"/>
+  <global-property name="SFDC_LOGIN_URL" value="https://login.salesforce.com" doc:name="Login URL fallback"/>
 
   <configuration-properties file="config/${env}.yaml" doc:name="Environment properties"/>
 

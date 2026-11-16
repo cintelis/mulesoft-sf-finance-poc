@@ -27,7 +27,7 @@ mappings. The diagrams are editable `.drawio.svg` files in `docs/assets/`.
 | `samples/payments/` | Clean and deliberately bad payment files | Ready |
 | `finance-sys-api/` | System API over the finance database | Built and verified end to end by a 49-check smoke test. MUnit suites written but not yet run (see below) |
 | `salesforce/` | Salesforce metadata: `Invoice__c`, Account fields, Change Data Capture, permission set | Deployed |
-| `sfdc-sys-api/` | System API over Salesforce | Written and builds. Not yet run: needs the External Client App in Salesforce |
+| `sfdc-sys-api/` | System API over Salesforce | Runs against the Developer Edition org: JWT login, invoice upsert and account reads verified. Change Data Capture listener and account upsert not yet exercised |
 | `payments-file-sys-api/` | System API over the SFTP feed | Not started |
 | `customer-sync-prc-api/` | Process API: orchestration, mappings, reconciliation | Not started |
 | `docs/` | [Integration design](docs/architecture.md) with diagrams and field mappings | Design written; runbook not started |
