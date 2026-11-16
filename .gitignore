@@ -1,0 +1,26 @@
+# Secrets and local config
+infra/.env
+*.local.properties
+*.jks
+*.p12
+
+# SFTP drop zone contents (folders are kept with .gitkeep)
+infra/sftp-data/**
+!infra/sftp-data/*/
+!infra/sftp-data/**/.gitkeep
+
+# Mule / Maven
+target/
+.mule/
+*.jar
+.classpath
+.project
+.settings/
+.studio/
+
+# Editors and OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

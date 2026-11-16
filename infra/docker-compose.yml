@@ -1,0 +1,42 @@
+# Local stand-ins for the "on-premises" systems:
+#   finance-db  - Oracle Database Free, the legacy finance database
+#   legacy-sftp - SFTP drop zone for the nightly payments CSV
+#
+# Usage (from this folder):  docker compose up -d
+# Credentials come from infra/.env (copy .env.example).
+name: sf-finance-poc
+
+services:
+  finance-db:
+    image: gvenzl/oracle-free:23-slim-faststart
+    container_name: finance-db
+    ports:
+      - "${ORACLE_PORT:-1521}:1521"
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_SYS_PASSWORD}
+      APP_USER: ${FINANCE_DB_USER}
+      APP_USER_PASSWORD: ${FINANCE_DB_PASSWORD}
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+      # Runs once, on first start of an empty data volume.
+      - ./oracle-init:/container-entrypoint-initdb.d:ro
+      - ../db:/db:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  legacy-sftp:
+    image: atmoz/sftp:alpine
+    container_name: legacy-sftp
+    ports:
+      - "${SFTP_PORT:-2222}:22"
+    # user:password:uid - folders come from the bind mount below
+    command: "${SFTP_USER}:${SFTP_PASSWORD}:1001"
+    volumes:
+      - ./sftp-data:/home/${SFTP_USER}/payments
+
+volumes:
+  oracle-data:
