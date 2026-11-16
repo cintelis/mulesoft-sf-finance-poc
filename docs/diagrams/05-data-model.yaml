@@ -1,0 +1,73 @@
+title: Finance database model
+subtitle: Oracle schema FINANCE, with the keys that make each interface idempotent
+entities:
+  - id: customers
+    name: customers
+    x: 60
+    y: 120
+    w: 280
+    fields:
+      - PK customer_id
+      - UK customer_code
+      - UK sf_account_id (Salesforce Account ID)
+      - customer_name
+      - abn, email, phone
+      - address_line, suburb, state_code, postcode
+      - status (ACTIVE, ON_HOLD, CLOSED)
+      - credit_limit
+      - last_modified
+  - id: invoices
+    name: invoices
+    x: 500
+    y: 120
+    w: 280
+    fields:
+      - PK invoice_id
+      - UK invoice_number (Salesforce external ID)
+      - FK customer_id
+      - invoice_date, due_date
+      - amount_ex_gst, gst_amount
+      - total_amount (calculated)
+      - amount_paid
+      - status (OPEN, PART_PAID, PAID, VOID)
+      - last_modified (drives the watermark)
+  - id: payments
+    name: payments
+    x: 940
+    y: 120
+    w: 280
+    fields:
+      - PK payment_id
+      - UK payment_ref (idempotency key)
+      - FK invoice_id
+      - amount, currency_code
+      - payment_date
+      - payment_method (EFT, BPAY, CARD, CHEQUE)
+      - payer_name
+      - source_file
+  - id: watermark
+    name: sync_watermark
+    x: 500
+    y: 440
+    w: 280
+    fields:
+      - PK sync_name
+      - last_value
+      - updated_at
+  - id: errors
+    name: integration_errors
+    x: 940
+    y: 440
+    w: 280
+    fields:
+      - PK error_id
+      - correlation_id
+      - interface_name
+      - record_key
+      - error_type, error_message
+      - payload
+edges:
+  - {from: customers, to: invoices, label: has many}
+  - {from: invoices, to: payments, label: has many}
+texts:
+  - {id: procs, label: "Stored procedures: upsert_customer (keyed on sf_account_id) and apply_payment (keyed on payment_ref). View: v_customer_recon (one SHA-256 hash per migrated customer).", x: 60, y: 440, w: 380, h: 80}

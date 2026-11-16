@@ -1,0 +1,21 @@
+title: "Flow 2: invoice sync"
+subtitle: New and changed finance invoices are polled with a watermark and bulk-upserted to Salesforce
+zones:
+  - {id: sf, label: Salesforce, x: 40, y: 230, w: 230, h: 200, colour: blue}
+  - {id: mule, label: MuleSoft, x: 310, y: 110, w: 1100, h: 320, colour: green}
+  - {id: onprem, label: On-premises, x: 1450, y: 230, w: 230, h: 200, colour: amber}
+nodes:
+  - {id: invoice, label: Invoice__c, kind: datastore, sub: external ID, zone: sf, x: 80, y: 290, w: 150, h: 90}
+  - {id: sfdc, label: sfdc-sys-api, kind: service, sub: Bulk API upsert, zone: mule, x: 350, y: 300, w: 190}
+  - {id: sched, label: Scheduler, kind: worker, sub: every 5 minutes, zone: mule, x: 710, y: 160, w: 190}
+  - {id: prc, label: customer-sync-prc-api, kind: service, sub: map invoice to Invoice__c, zone: mule, x: 700, y: 300, w: 210}
+  - {id: fin, label: finance-sys-api, kind: service, sub: "GET /invoices, /watermarks", zone: mule, x: 1170, y: 300, w: 200}
+  - {id: oracle, label: Oracle, kind: datastore, sub: "invoices, sync_watermark", zone: onprem, x: 1485, y: 290, w: 160, h: 90}
+  - {id: why, label: Why nothing is lost or doubled, kind: note, sub: "The watermark moves only after Salesforce accepts the batch. A failed run re-reads the same rows, and the upsert makes that harmless", x: 620, y: 480, w: 370, h: 100}
+edges:
+  - {from: sched, to: prc, label: start run}
+  - {from: prc, to: fin, label: "1-2 read, 5 move watermark"}
+  - {from: fin, to: oracle, label: SQL, style: data}
+  - {from: prc, to: sfdc, label: 3 mapped batch}
+  - {from: sfdc, to: invoice, label: 4 upsert, style: data}
+legend: true

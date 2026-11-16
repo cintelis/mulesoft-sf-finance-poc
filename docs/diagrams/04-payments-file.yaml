@@ -1,0 +1,28 @@
+title: "Flow 3: nightly payments file"
+subtitle: The legacy CSV feed is processed row by row, and bad rows are set aside without stopping the file
+zones:
+  - {id: onprem1, label: "On-premises: file drop", x: 290, y: 110, w: 240, h: 420, colour: amber}
+  - {id: mule, label: MuleSoft, x: 570, y: 110, w: 880, h: 420, colour: green}
+  - {id: onprem2, label: "On-premises: database", x: 1490, y: 110, w: 230, h: 200, colour: amber}
+  - {id: sf, label: Salesforce, x: 1490, y: 330, w: 230, h: 200, colour: blue}
+nodes:
+  - {id: legacy, label: Legacy finance batch, kind: external, sub: runs nightly, x: 40, y: 180, w: 190}
+  - {id: inbound, label: /payments/inbound, kind: datastore, sub: payments_YYYYMMDD.csv, zone: onprem1, x: 325, y: 170, w: 170, h: 90}
+  - {id: done, label: /archive and /error, kind: datastore, sub: "processed file, rejects CSV", zone: onprem1, x: 325, y: 390, w: 170, h: 90}
+  - {id: pay, label: payments-file-sys-api, kind: service, sub: "list, read, move files", zone: mule, x: 610, y: 180, w: 200}
+  - {id: prc, label: customer-sync-prc-api, kind: worker, sub: "Batch job: validate, map, apply", zone: mule, x: 900, y: 180, w: 230}
+  - {id: fin, label: finance-sys-api, kind: service, sub: POST /payments, zone: mule, x: 1220, y: 180, w: 190}
+  - {id: sfdc, label: sfdc-sys-api, kind: service, sub: update Invoice__c, zone: mule, x: 1220, y: 400, w: 190}
+  - {id: oracle, label: Oracle, kind: datastore, sub: "payments, invoices", zone: onprem2, x: 1530, y: 170, w: 150, h: 90}
+  - {id: invoice, label: Invoice__c, kind: datastore, sub: status and amount paid, zone: sf, x: 1530, y: 390, w: 150, h: 90}
+  - {id: why, label: Per-row outcome, kind: note, sub: "Applied, duplicate (skipped) or rejected with a reason. One bad row never fails the file", x: 30, y: 380, w: 230, h: 130}
+edges:
+  - {from: legacy, to: inbound, label: 1 drop file, style: data}
+  - {from: inbound, to: pay, label: 2 poll, style: data}
+  - {from: pay, to: prc, label: 3 rows}
+  - {from: prc, to: fin, label: 4 apply payment}
+  - {from: fin, to: oracle, label: apply_payment, style: data}
+  - {from: prc, to: sfdc, label: 5 new invoice status, exit: bottom, entry: left, points: [[1015, 432]]}
+  - {from: sfdc, to: invoice, label: update, style: data}
+  - {from: pay, to: done, label: 6 archive file and write rejects, style: data, exit: bottom, entry: right, points: [[710, 435]]}
+legend: true

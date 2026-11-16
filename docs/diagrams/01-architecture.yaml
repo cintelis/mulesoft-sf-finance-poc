@@ -1,0 +1,31 @@
+title: API-led architecture
+subtitle: Salesforce and the legacy finance system never talk to each other directly
+zones:
+  - {id: mule, label: "MuleSoft Anypoint (Mule 4.9)", x: 260, y: 110, w: 980, h: 480, colour: green}
+  - {id: sf, label: Salesforce Developer Edition, x: 280, y: 650, w: 300, h: 170, colour: blue}
+  - {id: onprem, label: "On-premises finance system (Docker stand-ins)", x: 620, y: 650, w: 620, h: 170, colour: amber}
+nodes:
+  - {id: portal, label: .NET finance portal, kind: external, sub: optional consumer, x: 30, y: 160, w: 190}
+  - {id: exp, label: finance-portal-exp-api, kind: service, sub: optional, zone: mule, x: 635, y: 160, w: 210}
+  - {id: prc, label: customer-sync-prc-api, kind: service, sub: "orchestration, mappings, retries", zone: mule, x: 625, y: 310, w: 230}
+  - {id: sfdc, label: sfdc-sys-api, kind: service, sub: Salesforce connector, zone: mule, x: 330, y: 480, w: 200}
+  - {id: fin, label: finance-sys-api, kind: service, sub: Database connector, zone: mule, x: 640, y: 480, w: 200}
+  - {id: pay, label: payments-file-sys-api, kind: service, sub: SFTP connector, zone: mule, x: 950, y: 480, w: 200}
+  - {id: salesforce, label: Salesforce org, kind: external, sub: "Account, Invoice__c, CDC", zone: sf, x: 330, y: 710, w: 200}
+  - {id: oracle, label: Oracle database, kind: datastore, sub: FINANCE schema, zone: onprem, x: 665, y: 700, w: 150, h: 90}
+  - {id: sftp, label: SFTP server, kind: datastore, sub: nightly payments CSV, zone: onprem, x: 970, y: 700, w: 160, h: 90}
+  - {id: common, label: Every API has, kind: note, sub: "RAML spec, one error format, correlation ID, JSON logs, MUnit tests", x: 30, y: 300, w: 200, h: 110}
+texts:
+  - {id: l-exp, label: Experience layer, x: 285, y: 180, w: 130, bold: true}
+  - {id: l-prc, label: Process layer, x: 285, y: 290, w: 130, bold: true}
+  - {id: l-sys, label: System layer, x: 285, y: 440, w: 130, bold: true}
+edges:
+  - {from: portal, to: exp, label: HTTPS + client ID}
+  - {from: exp, to: prc, label: HTTPS}
+  - {from: prc, to: sfdc, label: "upserts down, Account events up", both: true, exit: left, entry: top}
+  - {from: prc, to: fin, label: "customers, invoices, payments"}
+  - {from: prc, to: pay, label: "list, read, archive files", exit: right, entry: top}
+  - {from: sfdc, to: salesforce, label: "REST, Bulk API, CDC", both: true}
+  - {from: fin, to: oracle, label: "JDBC: SQL, PL/SQL", style: data}
+  - {from: pay, to: sftp, label: SFTP, style: data}
+legend: true

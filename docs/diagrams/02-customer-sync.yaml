@@ -1,0 +1,25 @@
+title: "Flow 1: customer sync"
+subtitle: A Salesforce Account change becomes a finance customer, event-driven and idempotent
+zones:
+  - {id: sf, label: Salesforce, x: 280, y: 110, w: 560, h: 200, colour: blue}
+  - {id: mule, label: MuleSoft, x: 880, y: 110, w: 850, h: 380, colour: green}
+  - {id: onprem, label: On-premises, x: 1770, y: 110, w: 220, h: 200, colour: amber}
+nodes:
+  - {id: user, label: Salesforce user, kind: actor, x: 60, y: 160}
+  - {id: account, label: Account, kind: datastore, zone: sf, x: 320, y: 170, w: 150, h: 90}
+  - {id: cdc, label: Change Data Capture, kind: queue, sub: AccountChangeEvent, zone: sf, x: 610, y: 180, w: 190}
+  - {id: sfdc, label: sfdc-sys-api, kind: service, sub: subscribes with replay ID, zone: mule, x: 920, y: 180, w: 200}
+  - {id: prc, label: customer-sync-prc-api, kind: service, sub: "map, dedupe, retry", zone: mule, x: 1210, y: 180, w: 210}
+  - {id: fin, label: finance-sys-api, kind: service, sub: "PUT /customers/{id}", zone: mule, x: 1500, y: 180, w: 190}
+  - {id: oracle, label: Oracle, kind: datastore, sub: customers, zone: onprem, x: 1805, y: 170, w: 150, h: 90}
+  - {id: dlq, label: Failed events, kind: queue, sub: integration_errors + alert, zone: mule, x: 1215, y: 380, w: 200}
+  - {id: why, label: Why it is safe to replay, kind: note, sub: "The upsert is keyed on the Salesforce ID, so the same event twice gives the same row", x: 1480, y: 360, w: 220, h: 110, zone: mule}
+edges:
+  - {from: user, to: account, label: 1 create or edit}
+  - {from: account, to: cdc, label: 2 change captured, style: async}
+  - {from: cdc, to: sfdc, label: 3 event, style: async}
+  - {from: sfdc, to: prc, label: 4 forward event}
+  - {from: prc, to: fin, label: 5 upsert}
+  - {from: fin, to: oracle, label: 6 upsert_customer, style: data}
+  - {from: prc, to: dlq, label: after 3 failed tries, style: async}
+legend: true

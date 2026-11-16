@@ -1,0 +1,27 @@
+title: Proposed deployment for the POC
+subtitle: Cloud-hosted Mule apps for Salesforce, a local Mule runtime beside the on-premises systems
+zones:
+  - {id: gh, label: GitHub, x: 40, y: 110, w: 250, h: 200, colour: grey}
+  - {id: ch, label: "MuleSoft CloudHub (trial)", x: 350, y: 110, w: 840, h: 200, colour: green}
+  - {id: sfz, label: Salesforce, x: 1250, y: 110, w: 240, h: 200, colour: blue}
+  - {id: laptop, label: "Laptop, standing in for the on-premises network", x: 350, y: 500, w: 1140, h: 220, colour: amber}
+nodes:
+  - {id: actions, label: GitHub Actions, kind: worker, sub: "MUnit, package, deploy", zone: gh, x: 70, y: 180, w: 190}
+  - {id: apim, label: API Manager, kind: security, sub: "client ID, rate limit", zone: ch, x: 390, y: 180, w: 190}
+  - {id: prc, label: customer-sync-prc-api, kind: service, zone: ch, x: 670, y: 180, w: 200}
+  - {id: sfdc, label: sfdc-sys-api, kind: service, zone: ch, x: 960, y: 180, w: 190}
+  - {id: salesforce, label: Salesforce org, kind: external, sub: Developer Edition, zone: sfz, x: 1280, y: 180, w: 180}
+  - {id: tunnel, label: HTTPS tunnel, kind: security, sub: opened outbound from the laptop, x: 655, y: 380, w: 230, h: 56}
+  - {id: oracle, label: Oracle, kind: datastore, sub: Docker, zone: laptop, x: 400, y: 570, w: 150, h: 90}
+  - {id: runtime, label: Local Mule runtime, kind: service, sub: "finance-sys-api, payments-file-sys-api", zone: laptop, x: 640, y: 575, w: 260, h: 80}
+  - {id: sftp, label: SFTP, kind: datastore, sub: Docker, zone: laptop, x: 1010, y: 570, w: 150, h: 90}
+edges:
+  - {from: actions, to: apim, label: deploy}
+  - {from: apim, to: prc, label: policies, style: weak}
+  - {from: prc, to: sfdc, label: HTTPS}
+  - {from: sfdc, to: salesforce, label: OAuth JWT}
+  - {from: prc, to: tunnel, label: HTTPS to system APIs}
+  - {from: tunnel, to: runtime, label: forwards}
+  - {from: runtime, to: oracle, label: JDBC, style: data}
+  - {from: runtime, to: sftp, label: SFTP, style: data}
+legend: true
