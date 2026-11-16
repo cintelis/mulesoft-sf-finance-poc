@@ -12,8 +12,8 @@ var outcomes = results map (result, index) -> do {
     key: vars.keys[index],
     success: ok,
     id: result.payload.id,
-    created: result.payload.created default false,
-    errors: fieldErrors ++ otherError
+    created: ok and (result.payload.created default false),
+    errors: (fieldErrors ++ otherError) distinctBy ((e) -> e)
   }
 }
 ---

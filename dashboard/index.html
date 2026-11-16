@@ -67,6 +67,13 @@
   .issue .msg { overflow-wrap: anywhere; }
   .issue code { font-size: 11.5px; }
   h3 { font-size: 13px; margin: 14px 0 6px; }
+  details.section { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+  details.section > summary { font-size: 13px; font-weight: 650; color: var(--ink); list-style-position: outside; }
+  details.section > summary .n { font-weight: 400; color: var(--muted); }
+  details.section > *:not(summary) { margin-top: 8px; }
+  details.top > summary { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 650; }
+  main.panel-hidden { grid-template-columns: minmax(0, 1fr); }
+  main.panel-hidden #splitter, main.panel-hidden aside { display: none; }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
@@ -95,6 +102,7 @@
   <button data-action="reconcile" title="Compare customers in both systems by hash">Reconcile</button>
   <select id="sample" title="Sample payments file"></select>
   <button data-action="process-payments" title="Process the selected payments CSV">Process payments file</button>
+  <button id="toggle-panel" aria-expanded="true" aria-controls="side-panel" title="Hide or show the details panel">Hide panel</button>
 </header>
 <main>
   <div id="canvas">
@@ -109,11 +117,12 @@
     <div id="hint">Drag to pan · scroll to zoom · click a component or a line for details and errors</div>
   </div>
   <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize the details panel" tabindex="0" title="Drag to resize. Double-click to reset."></div>
-  <aside>
+  <aside id="side-panel">
     <h2>Selected component or connection</h2>
     <div id="detail" class="empty">Click a component or a connection line on the canvas.</div>
-    <h2>Activity this session</h2>
-    <div id="activity" class="empty">Nothing run yet.</div>
+    <details class="section top" id="activity-section"><summary>Activity this session <span class="n" id="activity-count">(0)</span></summary>
+      <div id="activity" class="empty">Nothing run yet.</div>
+    </details>
     <h2>Last runs recorded by the process API</h2>
     <div id="runs" class="empty">Process API not reachable.</div>
   </aside>
@@ -324,8 +333,8 @@ function renderDetail(info, byId, issues) {
     html = `<p style="margin:0 0 8px"><strong>${esc(A.title)} ${e.both ? '↔' : '→'} ${esc(B.title)}</strong> <span class="pill ${live ? 'up' : 'unknown'}">${live ? 'Both ends up' : 'An end is not up'}</span></p>` +
       `<p style="margin:0 0 8px">${esc(what[0])}</p>` +
       `<dl class="kv"><dt>Carries</dt><dd>${esc(e.label)}</dd><dt>Protocol</dt><dd>${esc(what[1])}</dd></dl>` +
-      `<h3>Errors and rejected requests on this connection</h3>` + issueList(list, 'None found in the logs.') +
-      `<p class="meta" style="color:var(--muted);margin:8px 0 0">An issue is placed on a connection by matching its text, so some land on the component only.</p>`;
+      `<details class="section" data-k="issues"><summary>Errors and rejected requests <span class="n">(${list.length})</span></summary>` + issueList(list, 'None found in the logs.') +
+      `<p class="meta" style="color:var(--muted)">An issue is placed on a connection by matching its text, so some land on the component only.</p></details>`;
   } else {
     const n = byId[selected.id], d = info[selected.id];
     html = `<p style="margin:0 0 8px"><strong>${esc(n.title)}</strong> <span class="pill ${d.status}">${STATUS_TEXT[d.status]}</span><br><span style="color:var(--muted)">${esc(n.sub)}</span></p>` +
@@ -333,10 +342,11 @@ function renderDetail(info, byId, issues) {
       `<dl class="kv">${d.facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` +
       (d.link ? `<p style="margin:10px 0 0"><a href="${esc(d.link)}" target="_blank" rel="noopener">${esc(d.linkText)}</a></p>` : '');
     if (LOG_COMPONENTS[selected.id]) {
-      html += `<h3>Errors and rejected requests</h3>` + issueList(issues.components[selected.id], 'None found in this app’s log.');
+      const own = issues.components[selected.id] || [];
+      html += `<details class="section" data-k="issues"><summary>Errors and rejected requests <span class="n">(${own.length})</span></summary>` + issueList(own, 'None found in this app’s log.') + `</details>`;
       if (selected.id === 'prc') {
         const rej = recordRejections();
-        html += `<h3>Records refused in the last runs</h3>` + (rej.length ? `<ul style="margin:0;padding-left:18px">${rej.map((x) => `<li>${x}</li>`).join('')}</ul>` : `<p class="empty" style="margin:0">None.</p>`);
+        html += `<details class="section" data-k="refused"><summary>Records refused in the last runs <span class="n">(${rej.length})</span></summary>` + (rej.length ? `<ul style="margin:0;padding-left:18px">${rej.map((x) => `<li>${x}</li>`).join('')}</ul>` : `<p class="empty" style="margin:0">None.</p>`) + `</details>`;
       }
     } else {
       html += `<p class="meta" style="color:var(--muted);margin:10px 0 0">This component has no log the dashboard can read. Errors reaching it show on its connections.</p>`;
@@ -388,6 +398,8 @@ document.querySelectorAll('button[data-action]').forEach((button) => {
     const file = action === 'process-payments' ? ' (' + document.getElementById('sample').value + ')' : '';
     activity.unshift({ id: ++activityId, label: ACTION_LABELS[action] + file, when: new Date().toLocaleTimeString(), ...result });
     renderActivity();
+    document.getElementById('activity-count').textContent = `(${activity.length})`;
+    document.getElementById('activity-section').open = true;
     button.classList.remove('busy'); button.textContent = label;
     await refresh();
   });
@@ -450,6 +462,20 @@ splitter.addEventListener('dblclick', () => setSide(380));
 let saved = 380;
 try { saved = Number(localStorage.getItem('dashboard.side')) || 380; } catch { /* storage unavailable */ }
 setSide(saved);
+
+// Hide or show the right panel. The choice is remembered.
+const toggle = document.getElementById('toggle-panel');
+function setPanel(hidden) {
+  mainEl.classList.toggle('panel-hidden', hidden);
+  toggle.textContent = hidden ? 'Show panel' : 'Hide panel';
+  toggle.setAttribute('aria-expanded', String(!hidden));
+  try { localStorage.setItem('dashboard.panelHidden', hidden ? '1' : ''); } catch { /* storage unavailable */ }
+  fit();
+}
+toggle.addEventListener('click', () => setPanel(!mainEl.classList.contains('panel-hidden')));
+let hiddenSaved = false;
+try { hiddenSaved = localStorage.getItem('dashboard.panelHidden') === '1'; } catch { /* storage unavailable */ }
+setPanel(hiddenSaved);
 
 refresh(); setInterval(refresh, 5000);
 </script>

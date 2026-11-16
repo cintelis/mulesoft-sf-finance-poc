@@ -29,7 +29,7 @@ mappings. The diagrams are editable `.drawio.svg` files in `docs/assets/`.
 | `salesforce/` | Salesforce metadata: `Invoice__c`, Account fields, Change Data Capture, permission set | Deployed |
 | `sfdc-sys-api/` | System API over Salesforce | Runs against the Developer Edition org: JWT login, invoice upsert and account reads verified. Change Data Capture listener and account upsert not yet exercised |
 | `payments-file-sys-api/` | System API over the SFTP feed | Not started |
-| `customer-sync-prc-api/` | Process API: customer sync, invoice sync, payments file, migration, reconciliation | Runs locally. Invoice sync, payments file and reconciliation verified; migration and live Account events not yet run |
+| `customer-sync-prc-api/` | Process API: customer sync, invoice sync, payments file, migration, reconciliation | Runs locally. All five flows verified against the Developer Edition org and the Docker database |
 | `dashboard/` | Local single-page view of all components, connections, errors and flow buttons | Working |
 | `docs/` | [Integration design](docs/architecture.md) with diagrams and field mappings | Design written; runbook not started |
 

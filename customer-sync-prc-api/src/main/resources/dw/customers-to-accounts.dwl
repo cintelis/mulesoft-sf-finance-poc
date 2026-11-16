@@ -13,7 +13,7 @@ output application/json skipNullOn="everywhere"
     phone:             customer.phone,
     billingStreet:     customer.addressLine,
     billingCity:       customer.suburb,
-    billingState:      customer.state,
+    billingState:      toStateName(customer.state),
     billingPostalCode: customer.postcode,
     billingCountry:    if (customer.country == "AU") "Australia" else customer.country,
     status:            financeStatusToAccount[customer.status default ""],

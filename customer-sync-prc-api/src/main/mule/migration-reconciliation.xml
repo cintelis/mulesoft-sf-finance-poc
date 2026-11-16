@@ -28,7 +28,7 @@
       </when>
     </choice>
     <set-variable variableName="customers" value="#[vars.res.body.items default []]" doc:name="Remember customers"/>
-    <set-variable variableName="upsert" value="#[{ total: 0, succeeded: 0, failed: 0, results: [] }]" doc:name="Nothing sent yet"/>
+    <set-variable variableName="accountUpsert" value="#[{ total: 0, succeeded: 0, failed: 0, results: [] }]" doc:name="Nothing sent yet"/>
     <set-variable variableName="links" value="#[[]]" doc:name="No links yet"/>
     <set-variable variableName="invoiceSync" value="#[null]" doc:name="No sync yet"/>
 
@@ -47,9 +47,9 @@
                          description="#['Salesforce system API rejected the Account batch: ' ++ (vars.res.body.error.message default ('HTTP ' ++ (vars.res.status as String)))]"/>
           </when>
         </choice>
-        <set-variable variableName="upsert" value="#[vars.res.body]" doc:name="Remember result"/>
+        <set-variable variableName="accountUpsert" value="#[vars.res.body]" doc:name="Remember result"/>
 
-        <foreach collection="#[vars.upsert.results filter ((r) -> r.success)]" doc:name="Each new Account">
+        <foreach collection="#[vars.accountUpsert.results filter ((r) -> r.success)]" doc:name="Each new Account">
           <set-variable variableName="created" value="#[payload]" doc:name="Account"/>
           <set-variable variableName="reqBody" value="#[output application/json --- { sfAccountId: vars.created.id }]" doc:name="Link body"/>
           <set-variable variableName="req" value="#[{ method: 'PUT', path: '/customer-links/' ++ vars.created.key }]" doc:name="Link customer"/>
@@ -69,14 +69,14 @@
       <ee:message>
         <ee:set-payload><![CDATA[%dw 2.0
 output application/json
-var failures = (vars.upsert.results default []) filter ((r) -> not r.success)
+var failures = (vars.accountUpsert.results default []) filter ((r) -> not r.success)
 ---
 {
   startedAt: vars.startedAt,
   finishedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"},
   customersFound: sizeOf(vars.customers),
-  accountsCreated: sizeOf((vars.upsert.results default []) filter ((r) -> r.success and r.created)),
-  accountsUpdated: sizeOf((vars.upsert.results default []) filter ((r) -> r.success and not r.created)),
+  accountsCreated: sizeOf((vars.accountUpsert.results default []) filter ((r) -> r.success and r.created)),
+  accountsUpdated: sizeOf((vars.accountUpsert.results default []) filter ((r) -> r.success and not r.created)),
   accountsFailed: sizeOf(failures),
   customersLinked: sizeOf(vars.links filter ((l) -> l.linked)),
   failures: failures map ((r) -> { customerCode: r.key, errors: r.errors }),

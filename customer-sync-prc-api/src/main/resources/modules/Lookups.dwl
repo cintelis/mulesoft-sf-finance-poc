@@ -15,6 +15,19 @@ var stateCodesByName = {
 }
 var stateCodes = ["NSW", "VIC", "QLD", "WA", "SA", "TAS", "NT", "ACT"]
 
+// Salesforce orgs with state and country picklists switched on accept the full
+// state name, not the code.
+var stateNamesByCode = {
+  "NSW": "New South Wales",
+  "VIC": "Victoria",
+  "QLD": "Queensland",
+  "WA": "Western Australia",
+  "SA": "South Australia",
+  "TAS": "Tasmania",
+  "NT": "Northern Territory",
+  "ACT": "Australian Capital Territory"
+}
+
 var accountStatusToFinance = { "Active": "ACTIVE", "On Hold": "ON_HOLD", "Closed": "CLOSED" }
 var financeStatusToAccount = { "ACTIVE": "Active", "ON_HOLD": "On Hold", "CLOSED": "Closed" }
 var invoiceStatusToSalesforce = { "OPEN": "Open", "PART_PAID": "Part Paid", "PAID": "Paid", "VOID": "Void" }
@@ -29,6 +42,9 @@ fun toStateCode(value) = do {
   else if (stateCodes contains name) name
   else stateCodesByName[name]
 }
+
+// "NSW" -> "New South Wales". Anything unrecognised is passed through unchanged.
+fun toStateName(value) = stateNamesByCode[upper(text(value))] default value
 
 // A Salesforce Account with no status is treated as active, as finance does.
 fun toFinanceStatus(value) = accountStatusToFinance[text(value)] default "ACTIVE"

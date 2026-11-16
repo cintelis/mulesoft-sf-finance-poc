@@ -88,7 +88,7 @@ async function loadSalesforce() {
     const setup = instanceUrl.replace('.my.salesforce.com', '.my.salesforce-setup.com');
     links = {
       invoices: `${lightning}/lightning/o/Invoice__c/list?filterName=All_Invoices`,
-      accounts: `${lightning}/lightning/o/Account/list`,
+      accounts: `${lightning}/lightning/o/Account/list?filterName=AllAccounts`,
       externalClientApp: `${setup}/lightning/setup/ManageExternalClientApplication/home`,
       changeDataCapture: `${setup}/lightning/setup/CdcObjectEnablement/home`,
     };
