@@ -1,0 +1,78 @@
+#%RAML 1.0
+title: Payments File System API
+version: v1
+description: |
+  System API over the legacy payments feed: a nightly CSV dropped on an SFTP
+  server. It owns everything about the file transport, so nothing else needs to
+  know that payments arrive by SFTP.
+
+  Most of its work is not triggered through this API. It watches the inbound
+  folder, hands each new file to the process API, then archives the file and
+  writes any rejected rows to the error folder. The operations here are for
+  checking on it.
+
+  Send `X-Correlation-ID` to trace a request. It is echoed on every response
+  and written to every log line.
+mediaType: application/json
+protocols: [HTTP, HTTPS]
+
+types:
+  Health:
+    type: object
+    properties:
+      status:
+        type: string
+        enum: [UP, DOWN]
+      sftp:
+        type: string
+        enum: [UP, DOWN]
+
+  FileInfo:
+    type: object
+    properties:
+      name: string
+      size: integer
+      modified: string | nil
+
+  Folders:
+    type: object
+    properties:
+      inbound:
+        type: FileInfo[]
+        description: Files waiting to be processed.
+      archive:
+        type: FileInfo[]
+        description: Files that were processed.
+      error:
+        type: FileInfo[]
+        description: One rejects file for each processed file that had rejected rows.
+
+  Error:
+    type: object
+    properties:
+      error:
+        type: object
+        properties:
+          code: string
+          message: string
+          correlationId: string
+          timestamp: string
+
+/health:
+  get:
+    description: Liveness check, including a round trip to the SFTP server.
+    responses:
+      200:
+        body: Health
+      503:
+        body: Health
+
+/files:
+  get:
+    description: What is in the inbound, archive and error folders.
+    responses:
+      200:
+        body: Folders
+      503:
+        description: The SFTP server is unavailable.
+        body: Error

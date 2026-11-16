@@ -1,0 +1,23 @@
+# Local development against the SFTP container in infra/docker-compose.yml.
+# The password comes from the SFTP_PASSWORD environment variable (infra/.env).
+http:
+  port: "8084"
+
+sftp:
+  host: "localhost"
+  port: "2222"
+  user: "legacy"
+  password: "${SFTP_PASSWORD}"
+  inboundDir: "/payments/inbound"
+  archiveDir: "/payments/archive"
+  errorDir: "/payments/error"
+
+listener:
+  # started | stopped : whether to watch the inbound folder
+  state: "started"
+  pollSeconds: "15"
+
+processApi:
+  host: "localhost"
+  port: "8083"
+  basePath: "/api"

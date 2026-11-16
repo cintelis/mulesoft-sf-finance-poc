@@ -19,6 +19,7 @@ const APIS = {
   finance: process.env.FINANCE_API_URL || 'http://localhost:8081/api',
   sfdc: process.env.SFDC_API_URL || 'http://localhost:8082/api',
   prc: process.env.PROCESS_API_URL || 'http://localhost:8083/api',
+  paymentsFile: process.env.PAYMENTS_FILE_API_URL || 'http://localhost:8084/api',
 };
 
 async function call(url, options = {}) {
@@ -101,7 +102,7 @@ async function loadSalesforce() {
 // The apps log one JSON object per line, so this is a plain tail and filter.
 // ---------------------------------------------------------------------------
 const os = require('os');
-const LOG_APPS = { finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api' };
+const LOG_APPS = { finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api', paymentsFile: 'payments-file-sys-api' };
 
 function findLogDir() {
   if (process.env.MULE_LOG_DIR) return process.env.MULE_LOG_DIR;
@@ -143,6 +144,10 @@ function connectionFor(app, text) {
     if (/invoice/i.test(text)) return 'sfdc>sfInvoices';
     if (/SALESFORCE:|salesforce/i.test(text)) return 'sfdc>accounts';
     return null;
+  }
+  if (app === 'paymentsFile') {
+    if (/process api|:8083|HTTP:/i.test(text)) return 'prc>paymentsFile';
+    return 'paymentsFile>sftp';
   }
   if (app === 'prc') {
     if (/:8081|finance/i.test(text)) return 'prc>finance';
@@ -214,13 +219,14 @@ function listSamples() {
 }
 
 async function loadState() {
-  const [financeHealth, sfdcHealth, prcHealth, customers, invoices, status] = await Promise.all([
+  const [financeHealth, sfdcHealth, prcHealth, customers, invoices, status, paymentsHealth] = await Promise.all([
     call(`${APIS.finance}/health`, { timeout: 5000 }),
     call(`${APIS.sfdc}/health`, { timeout: 12000 }),
     call(`${APIS.prc}/health`, { timeout: 12000 }),
     call(`${APIS.finance}/customers`),
     call(`${APIS.finance}/invoices?limit=1000`),
     call(`${APIS.prc}/status`, { timeout: 5000 }),
+    call(`${APIS.paymentsFile}/health`, { timeout: 8000 }),
   ]);
   const customerItems = customers.ok ? customers.body.items : null;
   const invoiceItems = invoices.ok ? invoices.body.items : null;
@@ -246,7 +252,7 @@ async function loadState() {
       finance: { url: APIS.finance, ...health(financeHealth, 'database') },
       sfdc: { url: APIS.sfdc, ...health(sfdcHealth, 'salesforce') },
       prc: { url: APIS.prc, ...health(prcHealth, null), dependencies: prcHealth.body && prcHealth.body.dependencies },
-      paymentsFile: { url: null, reachable: false, up: false, detail: 'Not built yet' },
+      paymentsFile: { url: APIS.paymentsFile, ...health(paymentsHealth, 'sftp') },
     },
     containers: cached('containers', 5000, loadContainers),
     finance: {
@@ -269,13 +275,19 @@ const ACTIONS = {
   'sync-invoices': () => call(`${APIS.prc}/sync/invoices`, { method: 'POST', timeout: 120000 }),
   'sync-invoices-full': () => call(`${APIS.prc}/sync/invoices?full=true`, { method: 'POST', timeout: 120000 }),
   reconcile: () => call(`${APIS.prc}/reconciliation/customers`, { timeout: 120000 }),
+  // Puts a sample file in the SFTP inbound folder, as the legacy finance batch
+  // would. payments-file-sys-api picks it up on its next poll.
   'process-payments': (input) => {
     const file = String((input && input.file) || '');
     if (!listSamples().includes(file)) return { ok: false, status: 400, body: { error: { message: `Unknown sample file ${file}` } } };
-    const csv = fs.readFileSync(path.join(REPO, 'samples', 'payments', file));
-    return call(`${APIS.prc}/payments/files?fileName=${encodeURIComponent(file)}`, {
-      method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: csv, timeout: 180000,
-    });
+    const inbound = path.join(REPO, 'infra', 'sftp-data', 'inbound');
+    try {
+      fs.mkdirSync(inbound, { recursive: true });
+      fs.copyFileSync(path.join(REPO, 'samples', 'payments', file), path.join(inbound, file));
+    } catch (error) {
+      return { ok: false, status: 500, body: { error: { message: `Could not copy the file to the inbound folder: ${error.message}` } } };
+    }
+    return { ok: true, status: 202, body: { fileName: file, droppedIn: '/payments/inbound', next: 'payments-file-sys-api picks it up within about 15 seconds. The result appears under Last runs, Payments file.' } };
   },
 };
 
@@ -285,7 +297,7 @@ const ACTIONS = {
 // script. Everything here acts on this machine alone.
 // ---------------------------------------------------------------------------
 const { spawn } = require('child_process');
-const APP_FOLDERS = { finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api' };
+const APP_FOLDERS = { finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api', paymentsFile: 'payments-file-sys-api' };
 
 function runtimeDir() {
   const logs = findLogDir();
@@ -408,7 +420,7 @@ const server = http.createServer(async (req, res) => {
       if (cache.salesforce) cache.salesforce.at = 0;
       return send(res, 200, { action: action[1], ms: Date.now() - started, ...result });
     }
-    const control = url.pathname.match(/^\/api\/control\/([a-z]+)\/(start|stop|restart)$/);
+    const control = url.pathname.match(/^\/api\/control\/([a-zA-Z]+)\/(start|stop|restart)$/);
     if (req.method === 'POST' && control && CONTROLS[control[1]]) {
       const result = await CONTROLS[control[1]][control[2]]();
       return send(res, 200, { target: control[1], operation: control[2], ...result });

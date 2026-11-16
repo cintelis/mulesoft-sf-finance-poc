@@ -12,11 +12,13 @@ To regenerate the diagrams after changing a spec in `docs/diagrams/`, see
 | Part | Status |
 |---|---|
 | Finance database and SFTP server (Docker) | Built and tested |
-| `finance-sys-api` | Built; see the project README for test status |
 | Salesforce objects, fields and Change Data Capture (`salesforce/`) | Deployed to the Developer Edition org |
-| `sfdc-sys-api` | Designed, not built |
-| `payments-file-sys-api` | Designed, not built |
-| `customer-sync-prc-api` | Designed, not built |
+| `finance-sys-api` | Runs; verified by a 49-check smoke test |
+| `sfdc-sys-api` | Runs against the org; JWT login, upserts and the change listener verified |
+| `payments-file-sys-api` | Runs; a file dropped on the SFTP server was processed, archived and its rejects written |
+| `customer-sync-prc-api` | Runs; all five flows verified |
+| Dashboard (`dashboard/`) | Working |
+| MUnit suites | Written for `finance-sys-api`; not yet run |
 | `finance-portal-exp-api` | Optional, not built |
 | CloudHub deployment and CI/CD | Proposed, not built |
 
@@ -109,16 +111,18 @@ interface that would be retired once finance can send payments by API.
 {{diagram:payments-file}}
 
 1. The legacy finance batch drops `payments_YYYYMMDD.csv` in `/payments/inbound`.
-2. `payments-file-sys-api` picks the file up.
-3. It hands the rows to a Batch Job in the process API. The file uses legacy
+2. `payments-file-sys-api` polls the folder and picks the file up once it has stopped growing.
+3. It hands the content to the process API, which handles the rows one at a time. The file uses legacy
    formats: `DD/MM/YYYY` dates and amounts such as `"1,375.00"`. The process API
    validates and converts each row.
 4. For each valid row it calls `POST /payments` on `finance-sys-api`, which calls
    the `apply_payment` stored procedure. The procedure records the payment and
    moves the invoice to part paid or paid.
 5. The new invoice status is sent to Salesforce.
-6. The file moves to `/payments/archive`. Rejected rows are written to a CSV in
-   `/payments/error` with the reason for each.
+6. `payments-file-sys-api` moves the file to `/payments/archive` and writes the
+   rejected rows to a CSV in `/payments/error` with the reason for each. If the
+   process API or finance was unreachable, the file stays in inbound and is tried
+   again on the next poll.
 
 **Each row ends in one of three ways:**
 

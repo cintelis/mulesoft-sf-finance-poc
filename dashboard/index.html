@@ -119,7 +119,7 @@
   <button data-action="sync-invoices-full" title="Send every invoice again. Safe: the upsert is idempotent"><span data-icon="repeat"></span><span class="lbl">Full resync</span></button>
   <button data-action="reconcile" title="Compare customers in both systems by hash"><span data-icon="scale"></span><span class="lbl">Reconcile</span></button>
   <select id="sample" title="Sample payments file"></select>
-  <button data-action="process-payments" title="Process the selected payments CSV"><span data-icon="file-up"></span><span class="lbl">Process payments file</span></button>
+  <button data-action="process-payments" title="Put the selected sample file in the SFTP inbound folder, as the legacy finance system would"><span data-icon="file-up"></span><span class="lbl">Drop payments file</span></button>
   <button id="toggle-panel" aria-expanded="true" aria-controls="side-panel" title="Hide or show the details panel"><span id="toggle-icon"></span><span class="lbl">Hide panel</span></button>
 </header>
 <main>
@@ -160,7 +160,7 @@ const NODES = [
   { id: 'prc', x: 582, y: 100, title: 'customer-sync-prc-api', sub: 'Process API · port 8083' },
   { id: 'sfdc', x: 420, y: 330, title: 'sfdc-sys-api', sub: 'System API · port 8082' },
   { id: 'finance', x: 744, y: 330, title: 'finance-sys-api', sub: 'System API · port 8081' },
-  { id: 'paymentsFile', x: 582, y: 535, title: 'payments-file-sys-api', sub: 'System API · SFTP' },
+  { id: 'paymentsFile', x: 582, y: 535, title: 'payments-file-sys-api', sub: 'System API · port 8084' },
   { id: 'oracle', x: 1092, y: 330, title: 'Oracle database', sub: 'finance-db container' },
   { id: 'sftp', x: 1092, y: 535, title: 'SFTP server', sub: 'legacy-sftp container' },
 ];
@@ -172,13 +172,13 @@ const EDGES = [
   { from: 'sfdc', to: 'sfInvoices', label: 'upsert' },
   { from: 'eca', to: 'sfdc', label: 'JWT login', kind: 'auth', a: 'right', b: 'bottom' },
   { from: 'prc', to: 'finance', label: 'customers · invoices · payments' },
-  { from: 'prc', to: 'paymentsFile', label: 'files', a: 'bottom', b: 'top' },
+  { from: 'prc', to: 'paymentsFile', label: 'files up · results down', a: 'bottom', b: 'top', both: true },
   { from: 'finance', to: 'oracle', label: 'SQL · PL/SQL' },
-  { from: 'paymentsFile', to: 'sftp', label: 'SFTP' },
+  { from: 'paymentsFile', to: 'sftp', label: 'poll · archive · rejects', both: true },
 ];
 const ACTION_LABELS = {
   'migrate-customers': 'Migrate customers', 'sync-invoices': 'Sync invoices', 'sync-invoices-full': 'Full resync',
-  reconcile: 'Reconcile', 'process-payments': 'Process payments file',
+  reconcile: 'Reconcile', 'process-payments': 'Drop payments file',
 };
 const RUN_LABELS = { invoiceSync: 'Invoice sync', customerMigration: 'Customer migration', paymentsFile: 'Payments file',
   accountEvents: 'Account change event', reconciliation: 'Reconciliation' };
@@ -224,7 +224,7 @@ function describe(id, s) {
     case 'prc': { const d = api(a.prc); if (a.prc.dependencies) d.facts.push(...Object.entries(a.prc.dependencies)); d.note = 'Orchestrates the flows: maps fields, retries, records each run.'; return d; }
     case 'sfdc': { const d = api(a.sfdc, 'Salesforce'); d.note = 'Wraps Salesforce: upserts on external IDs and listens for Account changes.'; return d; }
     case 'finance': { const d = api(a.finance, 'Database'); d.note = 'Wraps the Oracle schema and its stored procedures.'; return d; }
-    case 'paymentsFile': return { status: 'off', lines: ['Not built yet'], facts: [['Planned', 'Polls the SFTP inbound folder']], note: 'Until it exists, the dashboard sends sample files straight to the process API.' };
+    case 'paymentsFile': { const d = api(a.paymentsFile, 'SFTP server'); d.facts.push(['Watches', '/payments/inbound, every 15 seconds']); d.note = 'Wraps the SFTP feed: picks up payment files, hands them to the process API, archives them and writes a rejects file.'; return d; }
     case 'oracle': { const up = c['finance-db'] && c['finance-db'].up; return { status: c['finance-db'] ? (up && a.finance.backendUp !== false ? 'up' : 'down') : 'unknown',
       lines: [`${num(f.customers)} customers · ${num(f.invoices)} invoices`],
       facts: [['Container', c['finance-db'] ? c['finance-db'].status : 'Unknown'], ['Customers', num(f.customers)], ['Linked to Salesforce', num(f.customersLinked)], ['Invoices', num(f.invoices)],
@@ -243,11 +243,11 @@ const EDGE_INFO = {
   'sfdc>sfInvoices': ['Upserts invoices on the invoice number, so repeats never duplicate.', 'Salesforce API over HTTPS'],
   'eca>sfdc': ['sfdc-sys-api signs a token with its private key; Salesforce checks it against the certificate on the app.', 'OAuth 2.0 JWT bearer'],
   'prc>finance': ['Customer upserts and links, invoice reads by watermark, payment applications, reconciliation hashes.', 'HTTP + JSON, retried on 5xx only'],
-  'prc>paymentsFile': ['Will list, read and archive payment files. Not built yet.', 'HTTP + JSON'],
+  'prc>paymentsFile': ['Up: each payments file, sent as CSV. Down: the outcome of every row.', 'HTTP, CSV up and JSON down'],
   'finance>oracle': ['Parameterised SQL and the upsert_customer and apply_payment stored procedures.', 'JDBC'],
-  'paymentsFile>sftp': ['Will poll the inbound folder and move processed files. Not built yet.', 'SFTP'],
+  'paymentsFile>sftp': ['Polls the inbound folder, moves processed files to archive and writes rejected rows to the error folder.', 'SFTP'],
 };
-const LOG_COMPONENTS = { finance: 'finance', sfdc: 'sfdc', prc: 'prc' };   // components that have a log
+const LOG_COMPONENTS = { finance: 'finance', sfdc: 'sfdc', prc: 'prc', paymentsFile: 'paymentsFile' };   // components that have a log
 const RECENT_MS = 60 * 60 * 1000;
 
 const ago = (iso) => {
@@ -290,10 +290,10 @@ function setHtml(el, html, className) {
 function zoneControls(z) {
   let target, label, cls, text;
   if (z.id === 'mule') {
-    const up = ['finance', 'sfdc', 'prc'].filter((k) => state.apis[k].reachable).length;
+    const up = ['finance', 'sfdc', 'prc', 'paymentsFile'].filter((k) => state.apis[k].reachable).length;
     target = 'runtime'; label = 'Mule runtime';
-    cls = up === 3 ? 'up' : up ? 'unknown' : 'down';
-    text = up === 3 ? 'running' : up ? `${up} of 3 apps up` : 'stopped';
+    cls = up === 4 ? 'up' : up ? 'unknown' : 'down';
+    text = up === 4 ? 'running' : up ? `${up} of 4 apps up` : 'stopped';
   } else if (z.id === 'prem') {
     const cs = state.containers ? Object.values(state.containers) : null, up = cs ? cs.filter((c) => c.up).length : 0;
     target = 'docker'; label = 'Docker containers';
@@ -466,7 +466,7 @@ document.querySelectorAll('button[data-action]').forEach((button) => {
 });
 
 // Start, stop and restart buttons (runtime, Docker systems, or one app).
-const CONTROL_NAMES = { runtime: 'Mule runtime', docker: 'Docker systems', finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api' };
+const CONTROL_NAMES = { runtime: 'Mule runtime', docker: 'Docker systems', finance: 'finance-sys-api', sfdc: 'sfdc-sys-api', prc: 'customer-sync-prc-api', paymentsFile: 'payments-file-sys-api' };
 document.addEventListener('click', async (e) => {
   const button = e.target.closest('[data-control]');
   if (!button || button.disabled || moved) return;

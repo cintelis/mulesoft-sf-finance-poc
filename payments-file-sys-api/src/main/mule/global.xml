@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- Pick the environment with -Denv=dev|prod. Defaults to local. -->
+  <global-property name="env" value="local" doc:name="Default environment"/>
+  <!-- Lets the app start (and unit tests run) when the variable is not set.
+       A real SFTP_PASSWORD environment variable takes precedence. -->
+  <global-property name="SFTP_PASSWORD" value="not-set" doc:name="SFTP password fallback"/>
+  <configuration-properties file="config/${env}.yaml" doc:name="Environment properties"/>
+
+  <http:listener-config name="http-listener-config" doc:name="HTTP listener">
+    <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+  </http:listener-config>
+
+  <sftp:config name="sftp-config" doc:name="Legacy SFTP server">
+    <sftp:connection host="${sftp.host}" port="${sftp.port}" username="${sftp.user}" password="${sftp.password}">
+      <reconnection>
+        <reconnect frequency="3000" count="3"/>
+      </reconnection>
+    </sftp:connection>
+  </sftp:config>
+
+  <http:request-config name="process-api-client" basePath="${processApi.basePath}" responseTimeout="180000" doc:name="Process API">
+    <http:request-connection host="${processApi.host}" port="${processApi.port}"/>
+  </http:request-config>
+
+  <apikit:config name="payments-file-sys-api-config" api="api/payments-file-sys-api.raml"
+                 outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus"
+                 doc:name="APIkit router config"/>
+
+  <!-- Every error leaves the API in the same JSON shape. The mapping from
+       error type to status and code lives in modules/Errors.dwl. -->
+  <error-handler name="global-error-handler" doc:name="Global error handler">
+    <on-error-propagate type="ANY" logException="false" doc:name="Any error">
+      <ee:transform doc:name="Build error response">
+        <ee:message>
+          <ee:set-payload resource="dw/error-response.dwl"/>
+        </ee:message>
+        <ee:variables>
+          <ee:set-variable variableName="httpStatus" resource="dw/error-status.dwl"/>
+        </ee:variables>
+      </ee:transform>
+      <logger level="ERROR" category="payments-file-sys-api" doc:name="Log error"
+              message="#['error status=$(vars.httpStatus) type=$(error.errorType.namespace):$(error.errorType.identifier) description=$(error.description default '')']"/>
+    </on-error-propagate>
+  </error-handler>
+</mule>

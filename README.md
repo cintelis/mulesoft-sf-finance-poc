@@ -4,7 +4,7 @@ A small API-led integration between Salesforce and a legacy finance system,
 built with Mule 4. The finance system is an Oracle database and an SFTP file
 feed, both running in Docker to stand in for on-premises systems.
 
-![API-led architecture](docs/assets/b8b8513f-architecture.drawio.svg)
+![API-led architecture](docs/assets/fd38e74b-architecture.drawio.svg)
 
 **[Integration design](docs/architecture.md)**: six diagrams with step-by-step
 explanations of each flow, the data model, the proposed deployment and the field
@@ -28,7 +28,7 @@ mappings. The diagrams are editable `.drawio.svg` files in `docs/assets/`.
 | `finance-sys-api/` | System API over the finance database | Built and verified end to end by a 49-check smoke test. MUnit suites written but not yet run (see below) |
 | `salesforce/` | Salesforce metadata: `Invoice__c`, Account fields, Change Data Capture, permission set | Deployed |
 | `sfdc-sys-api/` | System API over Salesforce | Runs against the Developer Edition org: JWT login, invoice upsert and account reads verified. Change Data Capture listener and account upsert not yet exercised |
-| `payments-file-sys-api/` | System API over the SFTP feed | Not started |
+| `payments-file-sys-api/` | System API over the SFTP feed: picks up payment files, archives them, writes rejects | Runs locally. Verified with a file dropped on the SFTP server |
 | `customer-sync-prc-api/` | Process API: customer sync, invoice sync, payments file, migration, reconciliation | Runs locally. All five flows verified against the Developer Edition org and the Docker database |
 | `dashboard/` | Local single-page view of all components, connections, errors and flow buttons | Working |
 | `docs/` | [Integration design](docs/architecture.md) with diagrams and field mappings | Design written; runbook not started |

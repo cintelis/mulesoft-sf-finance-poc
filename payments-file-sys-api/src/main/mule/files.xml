@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:sftp="http://www.mulesoft.org/schema/mule/sftp"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/sftp http://www.mulesoft.org/schema/mule/sftp/current/mule-sftp.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- Watches the inbound folder for payment files.
+
+       For each new CSV:
+         1. hand the content to the process API, which applies the payments;
+         2. write the rows it did not apply to a rejects file in the error folder;
+         3. move the original to the archive folder.
+
+       If the process API cannot be reached, or it could not reach finance for
+       some rows, the file is left in inbound and tried again on the next poll.
+       That is safe: a payment reference is only ever applied once.
+
+       timeBetweenSizeCheck waits until a file has stopped growing, so a file
+       that is still being uploaded is not read half-written. -->
+  <flow name="payments-inbound-files" initialState="${listener.state}" doc:name="payments-inbound-files">
+    <sftp:listener config-ref="sftp-config" directory="${sftp.inboundDir}" autoDelete="false"
+                   watermarkEnabled="false" recursive="false"
+                   timeBetweenSizeCheck="2" timeBetweenSizeCheckUnit="SECONDS" doc:name="New payment file">
+      <scheduling-strategy>
+        <fixed-frequency frequency="${listener.pollSeconds}" timeUnit="SECONDS"/>
+      </scheduling-strategy>
+      <sftp:matcher filenamePattern="*.csv"/>
+    </sftp:listener>
+
+    <set-variable variableName="fileName" value="#[attributes.fileName]" doc:name="File name"/>
+    <set-variable variableName="filePath" value="#[attributes.path]" doc:name="File path"/>
+    <set-variable variableName="csv" value="#[output application/java --- payload.^raw as String {encoding: 'UTF-8'}]" doc:name="Read content"/>
+    <logger level="INFO" category="payments-file-sys-api" doc:name="Log pickup"
+            message="#[output application/java --- 'payments file picked up name=' ++ vars.fileName ++ ' bytes=' ++ (sizeOf(vars.csv) as String)]"/>
+
+    <http:request method="POST" config-ref="process-api-client" path="/payments/files" doc:name="Process API">
+      <http:body>#[output text/plain --- vars.csv]</http:body>
+      <http:headers>#[{ 'X-Correlation-ID': correlationId, 'Content-Type': 'text/csv' }]</http:headers>
+      <http:query-params>#[{ fileName: vars.fileName }]</http:query-params>
+    </http:request>
+    <set-variable variableName="result" value="#[output application/java --- payload]" doc:name="Remember result"/>
+
+    <choice doc:name="Any rows not applied?">
+      <when expression="#[(vars.result.rejected default 0) + (vars.result.failed default 0) > 0]">
+        <ee:transform doc:name="Build rejects file">
+          <ee:message>
+            <ee:set-payload resource="dw/rejects-file.dwl"/>
+          </ee:message>
+        </ee:transform>
+        <sftp:write config-ref="sftp-config" mode="OVERWRITE" createParentDirectories="true"
+                    path="#[p('sftp.errorDir') ++ '/' ++ (vars.fileName replace /\.csv$/ with '') ++ '.rejects.csv']" doc:name="Write rejects file"/>
+      </when>
+    </choice>
+
+    <choice doc:name="Fully processed?">
+      <when expression="#[(vars.result.failed default 0) == 0]">
+        <sftp:move config-ref="sftp-config" sourcePath="#[vars.filePath]" targetPath="${sftp.archiveDir}"
+                   overwrite="true" createParentDirectories="true" doc:name="Archive file"/>
+        <logger level="INFO" category="payments-file-sys-api" doc:name="Log archived"
+                message="#[output application/java --- 'payments file archived name=' ++ vars.fileName ++ ' applied=' ++ ((vars.result.applied default 0) as String) ++ ' duplicates=' ++ ((vars.result.duplicates default 0) as String) ++ ' rejected=' ++ ((vars.result.rejected default 0) as String)]"/>
+      </when>
+      <otherwise>
+        <logger level="WARN" category="payments-file-sys-api" doc:name="Log left for retry"
+                message="#[output application/java --- 'payments file left in inbound for retry name=' ++ vars.fileName ++ ' rowsNotTried=' ++ ((vars.result.failed default 0) as String)]"/>
+      </otherwise>
+    </choice>
+
+    <error-handler>
+      <on-error-continue type="ANY" logException="false" doc:name="Leave the file for the next poll">
+        <logger level="ERROR" category="payments-file-sys-api" doc:name="Log failure"
+                message="#[output application/java --- 'payments file failed and stays in inbound name=' ++ (vars.fileName default 'unknown') ++ ' type=' ++ (error.errorType.namespace default '') ++ ':' ++ (error.errorType.identifier default '') ++ ' description=' ++ (error.description default '')]"/>
+      </on-error-continue>
+    </error-handler>
+  </flow>
+
+  <!-- GET /health -->
+  <flow name="get:\health:payments-file-sys-api-config" doc:name="Health">
+    <try doc:name="Try SFTP">
+      <sftp:list config-ref="sftp-config" directoryPath="${sftp.inboundDir}" doc:name="List inbound"/>
+      <set-payload value="#[output application/json --- { status: 'UP', sftp: 'UP' }]" doc:name="Up"/>
+      <error-handler>
+        <on-error-continue type="ANY" logException="false" doc:name="SFTP down">
+          <logger level="WARN" category="payments-file-sys-api" doc:name="Log down"
+                  message="#[output application/java --- 'health check failed: ' ++ (error.description default '')]"/>
+          <set-variable variableName="httpStatus" value="#[503]" doc:name="503"/>
+          <set-payload value="#[output application/json --- { status: 'DOWN', sftp: 'DOWN' }]" doc:name="Down"/>
+        </on-error-continue>
+      </error-handler>
+    </try>
+  </flow>
+
+  <!-- GET /files -->
+  <flow name="get:\files:payments-file-sys-api-config" doc:name="List folders">
+    <sftp:list config-ref="sftp-config" directoryPath="${sftp.inboundDir}" target="inbound"
+               targetValue="#[output application/java --- payload map ((item) -> item.attributes)]" doc:name="List inbound"/>
+    <sftp:list config-ref="sftp-config" directoryPath="${sftp.archiveDir}" target="archive"
+               targetValue="#[output application/java --- payload map ((item) -> item.attributes)]" doc:name="List archive"/>
+    <sftp:list config-ref="sftp-config" directoryPath="${sftp.errorDir}" target="errorFiles"
+               targetValue="#[output application/java --- payload map ((item) -> item.attributes)]" doc:name="List error"/>
+    <ee:transform doc:name="Build folders">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+fun files(list) = (list default [])
+  filter ((f) -> !(f.directory default false) and !((f.fileName default "") startsWith "."))
+  map ((f) -> { name: f.fileName, size: f.size, modified: f.timestamp as String default null })
+---
+{
+  inbound: files(vars.inbound),
+  archive: files(vars.archive),
+  error: files(vars.errorFiles)
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+  </flow>
+</mule>
