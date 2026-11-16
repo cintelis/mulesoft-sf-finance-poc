@@ -39,7 +39,7 @@
       </ee:message>
     </ee:transform>
     <logger level="INFO" category="finance-sys-api" doc:name="Log page"
-            message="#['invoices since=' ++ vars.modifiedSince ++ ' returned=' ++ (payload.count as String)]"/>
+            message="#[output application/java --- 'invoices since=' ++ vars.modifiedSince ++ ' returned=' ++ (payload.count as String)]"/>
   </flow>
 
   <!-- POST /payments : apply one payment. Business rule failures come back from
@@ -85,6 +85,6 @@ output application/json
       </ee:message>
     </ee:transform>
     <logger level="INFO" category="finance-sys-api" doc:name="Log payment"
-            message="#['payment ref=' ++ payload.paymentRef ++ ' invoice=' ++ payload.invoiceNumber ++ ' result=' ++ payload.result]"/>
+            message="#[output application/java --- 'payment ref=' ++ payload.paymentRef ++ ' invoice=' ++ payload.invoiceNumber ++ ' result=' ++ payload.result]"/>
   </flow>
 </mule>

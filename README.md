@@ -19,7 +19,7 @@ feed, both running in Docker to stand in for on-premises systems.
 | `infra/` | Docker Compose for Oracle Database Free and SFTP | Working |
 | `db/` | Finance schema, stored procedures and seed data | Working |
 | `samples/payments/` | Clean and deliberately bad payment files | Ready |
-| `finance-sys-api/` | System API over the finance database | Built and packaged. MUnit tests written but not yet run (see below) |
+| `finance-sys-api/` | System API over the finance database | Built and verified end to end by a 49-check smoke test. MUnit suites written but not yet run (see below) |
 | `salesforce/` | Salesforce metadata: `Invoice__c`, Account fields, Change Data Capture, permission set | Deployed |
 | `sfdc-sys-api/` | System API over Salesforce | Not started |
 | `payments-file-sys-api/` | System API over the SFTP feed | Not started |
@@ -80,6 +80,28 @@ credentials in `~/.m2/settings.xml`, the command line works too:
 mvn clean test                              # unit tests, database mocked
 mvn clean test "-Dintegration.tests=true"   # plus end-to-end tests against the Docker database
 ```
+
+## Run finance-sys-api locally and smoke-test it
+
+Needs a Mule Enterprise runtime. Anypoint Code Builder installs one under
+`%USERPROFILE%AnypointCodeBuilderuntime` (command **MuleSoft: Install Runtime**).
+
+```powershell
+# from the runtime folder, with FINANCE_DB_PASSWORD and JAVA_HOME (JDK 17) set
+Copy-Item <repo>inance-sys-api	argetinance-sys-api-*-mule-application.jar appsinance-sys-api.jar
+binmule.bat console
+```
+
+Then, from Git Bash:
+
+```bash
+bash finance-sys-api/scripts/smoke-test.sh
+```
+
+The smoke test calls every endpoint against the Docker database: watermark
+paging, the idempotent customer upsert, the reconciliation hash, payments
+(applied, duplicate, unknown invoice, void invoice, invalid input), watermarks,
+routing and correlation IDs. It creates only rows marked IT and removes them.
 
 ## Deploy the Salesforce metadata
 

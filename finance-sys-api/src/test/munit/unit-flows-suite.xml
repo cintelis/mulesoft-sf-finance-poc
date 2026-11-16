@@ -381,6 +381,33 @@
       <munit-tools:assert-that expression="#[payload.syncName]" is="#[MunitTools::equalTo('invoice-sync')]"/>
       <munit-tools:assert-that expression="#[payload.value]" is="#[MunitTools::equalTo('2026-11-16T04:26:19.200000')]"/>
       <munit-tools:verify-call processor="db:update" times="1"/>
+      <munit-tools:verify-call processor="db:insert" times="0"/>
+    </munit:validation>
+  </munit:test>
+
+  <munit:test name="put-watermark-creates-when-missing" description="A watermark that does not exist yet is inserted">
+    <munit:behavior>
+      <munit-tools:mock-when processor="db:update" doc:name="Mock update, no row">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ affectedRows: 0 }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+      <munit-tools:mock-when processor="db:insert" doc:name="Mock insert">
+        <munit-tools:then-return>
+          <munit-tools:payload value="#[{ affectedRows: 1 }]"/>
+        </munit-tools:then-return>
+      </munit-tools:mock-when>
+    </munit:behavior>
+    <munit:execution>
+      <munit:set-event>
+        <munit:payload mediaType="application/json" value="#[output application/json --- { value: '2026-11-16T01:02:03' }]"/>
+        <munit:attributes value="#[{ uriParams: { syncName: 'new-sync' } }]"/>
+      </munit:set-event>
+      <flow-ref name="put:\watermarks\(syncName):application\json:finance-sys-api-config"/>
+    </munit:execution>
+    <munit:validation>
+      <munit-tools:assert-that expression="#[payload.syncName]" is="#[MunitTools::equalTo('new-sync')]"/>
+      <munit-tools:verify-call processor="db:insert" times="1"/>
     </munit:validation>
   </munit:test>
 </mule>

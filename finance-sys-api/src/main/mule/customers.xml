@@ -78,13 +78,13 @@ output application/json
       </ee:message>
     </ee:transform>
     <logger level="INFO" category="finance-sys-api" doc:name="Log upsert"
-            message="#['customer upsert sfAccountId=' ++ vars.sfAccountId ++ ' action=' ++ payload.action]"/>
+            message="#[output application/java --- 'customer upsert sfAccountId=' ++ vars.sfAccountId ++ ' action=' ++ payload.action]"/>
   </flow>
 
   <!-- PUT /customer-links/{customerCode} : link a legacy customer to its new Salesforce Account -->
   <flow name="put:\customer-links\(customerCode):application\json:finance-sys-api-config" doc:name="Link customer">
     <set-variable variableName="link" doc:name="Read link"
-                  value="#[{ customerCode: attributes.uriParams.customerCode, sfAccountId: payload.sfAccountId }]"/>
+                  value="#[output application/java --- { customerCode: attributes.uriParams.customerCode, sfAccountId: payload.sfAccountId }]"/>
     <db:update config-ref="finance-db-config" doc:name="Set Salesforce ID">
       <db:sql><![CDATA[
         UPDATE customers

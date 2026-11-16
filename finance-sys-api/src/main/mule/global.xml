@@ -15,6 +15,9 @@
 
   <!-- Pick the environment with -Denv=dev|prod. Defaults to local. -->
   <global-property name="env" value="local" doc:name="Default environment"/>
+  <!-- Lets the app start (and unit tests run) when the variable is not set.
+       A real FINANCE_DB_PASSWORD environment variable takes precedence. -->
+  <global-property name="FINANCE_DB_PASSWORD" value="not-set" doc:name="Database password fallback"/>
   <configuration-properties file="config/${env}.yaml" doc:name="Environment properties"/>
 
   <http:listener-config name="http-listener-config" doc:name="HTTP listener">

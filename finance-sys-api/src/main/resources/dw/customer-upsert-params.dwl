@@ -1,5 +1,4 @@
 %dw 2.0
-import isBlank from dw::core::Strings
 output application/java
 
 // Request body -> upsert_customer input parameters.

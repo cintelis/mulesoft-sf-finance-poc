@@ -73,21 +73,29 @@ var rows = payload default []
   <!-- PUT /watermarks/{syncName} -->
   <flow name="put:\watermarks\(syncName):application\json:finance-sys-api-config" doc:name="Set watermark">
     <set-variable variableName="watermark" doc:name="Read watermark"
-                  value="#[{ syncName: attributes.uriParams.syncName, value: payload.value }]"/>
-    <db:update config-ref="finance-db-config" doc:name="Merge watermark">
+                  value="#[output application/java --- { syncName: attributes.uriParams.syncName, value: payload.value }]"/>
+    <!-- Update first, insert only when the watermark does not exist yet.
+         (The Database connector does not accept a MERGE statement here.) -->
+    <db:update config-ref="finance-db-config" doc:name="Move watermark">
       <db:sql><![CDATA[
-        MERGE INTO sync_watermark w
-        USING (SELECT :syncName AS sync_name,
-                      TO_TIMESTAMP(:value, 'YYYY-MM-DD"T"HH24:MI:SS.FF6') AS last_value
-                 FROM dual) s
-           ON (w.sync_name = s.sync_name)
-         WHEN MATCHED THEN
-           UPDATE SET w.last_value = s.last_value, w.updated_at = SYSTIMESTAMP
-         WHEN NOT MATCHED THEN
-           INSERT (sync_name, last_value) VALUES (s.sync_name, s.last_value)
+        UPDATE sync_watermark
+           SET last_value = TO_TIMESTAMP(:value, 'YYYY-MM-DD"T"HH24:MI:SS.FF6'),
+               updated_at = SYSTIMESTAMP
+         WHERE sync_name = :syncName
       ]]></db:sql>
       <db:input-parameters>#[vars.watermark]</db:input-parameters>
     </db:update>
+    <choice doc:name="New watermark?">
+      <when expression="#[payload.affectedRows == 0]">
+        <db:insert config-ref="finance-db-config" doc:name="Create watermark">
+          <db:sql><![CDATA[
+            INSERT INTO sync_watermark (sync_name, last_value)
+            VALUES (:syncName, TO_TIMESTAMP(:value, 'YYYY-MM-DD"T"HH24:MI:SS.FF6'))
+          ]]></db:sql>
+          <db:input-parameters>#[vars.watermark]</db:input-parameters>
+        </db:insert>
+      </when>
+    </choice>
     <set-payload value="#[output application/json --- vars.watermark]" doc:name="Echo watermark"/>
   </flow>
 </mule>
