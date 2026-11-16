@@ -23,7 +23,7 @@ events:
   # started | stopped : whether to subscribe to Account change events
   listenerState: "started"
   # true to forward events to the process API; false to only log them
-  forwardEnabled: "false"
+  forwardEnabled: "true"
 
 processApi:
   host: "localhost"

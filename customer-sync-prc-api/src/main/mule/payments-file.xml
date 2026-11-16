@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- Flow 3: nightly payments file. POST /payments/files?fileName=...  (text/csv)
+
+       Each row ends as APPLIED, DUPLICATE or REJECTED. One bad row never fails
+       the file. Rows are handled one at a time so the response can report every
+       row; for very large files a Batch Job would do the same work in parallel
+       and report through its on-complete phase instead. -->
+  <flow name="post:\payments\files:text\csv:customer-sync-prc-api-config" doc:name="Process payments file">
+    <set-variable variableName="startedAt" value="#[now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ssXXX&quot;}]" doc:name="Started"/>
+    <set-variable variableName="fileName" value="#[attributes.queryParams.fileName default 'upload.csv']" doc:name="File name"/>
+    <try doc:name="Parse CSV">
+      <set-variable variableName="csvRows" doc:name="Read rows"
+                    value="#[output application/java --- read(payload.^raw as String {encoding: 'UTF-8'}, 'application/csv')]"/>
+      <error-handler>
+        <on-error-propagate type="ANY" logException="false" doc:name="Not a CSV">
+          <raise-error type="APP:BAD_FILE" description="The file could not be read as CSV." doc:name="Bad file"/>
+        </on-error-propagate>
+      </error-handler>
+    </try>
+    <ee:transform doc:name="Validate and convert rows">
+      <ee:variables>
+        <ee:set-variable variableName="rows" resource="dw/payment-rows.dwl"/>
+      </ee:variables>
+    </ee:transform>
+    <set-variable variableName="outcomes" value="#[[]]" doc:name="No outcomes yet"/>
+
+    <foreach collection="#[vars.rows]" doc:name="Each row">
+      <set-variable variableName="row" value="#[payload]" doc:name="Row"/>
+      <choice doc:name="Valid?">
+        <when expression="#[not vars.row.valid]">
+          <set-variable variableName="outcomes" doc:name="Add REJECTED"
+                        value="#[vars.outcomes ++ [{ row: vars.row.row, paymentRef: vars.row.paymentRef, invoiceNumber: vars.row.invoiceNumber, result: 'REJECTED', reason: vars.row.reasons joinBy '; ' }]]"/>
+        </when>
+        <otherwise>
+          <try doc:name="Try this payment">
+            <set-variable variableName="reqBody" value="#[output application/json --- vars.row.payment]" doc:name="Payment body"/>
+            <set-variable variableName="req" value="#[{ method: 'POST', path: '/payments' }]" doc:name="Apply payment"/>
+            <flow-ref name="call-finance" doc:name="Finance system API"/>
+            <set-variable variableName="outcomes" doc:name="Add outcome"
+                          value="#[vars.outcomes ++ [
+                            if (vars.res.status >= 400)
+                              { row: vars.row.row, paymentRef: vars.row.paymentRef, invoiceNumber: vars.row.invoiceNumber, result: 'REJECTED', reason: vars.res.body.error.message default ('HTTP ' ++ (vars.res.status as String)) }
+                            else
+                              { row: vars.row.row, paymentRef: vars.row.paymentRef, invoiceNumber: vars.row.invoiceNumber, result: vars.res.body.result, invoiceStatus: vars.res.body.invoiceStatus }
+                          ]]"/>
+            <error-handler>
+              <on-error-continue type="ANY" logException="false" doc:name="Record failure">
+                <set-variable variableName="outcomes" doc:name="Add FAILED"
+                              value="#[vars.outcomes ++ [{ row: vars.row.row, paymentRef: vars.row.paymentRef, invoiceNumber: vars.row.invoiceNumber, result: 'FAILED', reason: 'Finance system API unavailable. Safe to reprocess the file.' }]]"/>
+              </on-error-continue>
+            </error-handler>
+          </try>
+        </otherwise>
+      </choice>
+    </foreach>
+
+    <!-- Applying a payment changes the invoice in finance, so the normal
+         invoice sync carries the new status and amount paid to Salesforce. -->
+    <set-variable variableName="fullSync" value="#[false]" doc:name="Incremental"/>
+    <set-variable variableName="trigger" value="payments-file" doc:name="Trigger"/>
+    <try doc:name="Try invoice sync">
+      <flow-ref name="sync-invoices" doc:name="Sync invoices"/>
+      <set-variable variableName="invoiceSync" value="#[output application/java --- payload]" doc:name="Remember sync"/>
+      <error-handler>
+        <on-error-continue type="ANY" logException="false" doc:name="Sync failed">
+          <set-variable variableName="invoiceSync" value="#[{ failed: true, detail: error.description default 'Invoice sync failed' }]" doc:name="Remember failure"/>
+        </on-error-continue>
+      </error-handler>
+    </try>
+
+    <ee:transform doc:name="Build summary">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+fun count(result) = sizeOf(vars.outcomes filter ((o) -> o.result == result))
+---
+{
+  startedAt: vars.startedAt,
+  finishedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"},
+  fileName: vars.fileName,
+  rowsRead: sizeOf(vars.outcomes),
+  applied: count("APPLIED"),
+  duplicates: count("DUPLICATE"),
+  rejected: count("REJECTED"),
+  failed: count("FAILED"),
+  rows: vars.outcomes,
+  invoiceSync: vars.invoiceSync
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+    <set-variable variableName="statusKey" value="paymentsFile" doc:name="Status key"/>
+    <flow-ref name="record-status" doc:name="Record run"/>
+    <logger level="INFO" category="customer-sync-prc-api" doc:name="Log file"
+            message="#[output application/java --- 'payments file name=' ++ payload.fileName ++ ' rows=' ++ (payload.rowsRead as String) ++ ' applied=' ++ (payload.applied as String) ++ ' duplicates=' ++ (payload.duplicates as String) ++ ' rejected=' ++ (payload.rejected as String) ++ ' failed=' ++ (payload.failed as String)]"/>
+  </flow>
+</mule>

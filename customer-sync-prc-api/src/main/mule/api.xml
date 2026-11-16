@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+  <!-- Entry point. The HTTP listener takes the event's correlation ID from the
+       X-Correlation-ID request header, or generates one. It is echoed on every
+       response and appears on every log line. -->
+  <flow name="customer-sync-prc-api-main" doc:name="customer-sync-prc-api-main">
+    <http:listener config-ref="http-listener-config" path="/api/*" doc:name="Listener">
+      <http:response statusCode="#[vars.httpStatus default 200]">
+        <http:headers>#[(vars.outboundHeaders default {}) ++ {'X-Correlation-ID': correlationId}]</http:headers>
+      </http:response>
+      <http:error-response statusCode="#[vars.httpStatus default 500]">
+        <http:body>#[payload]</http:body>
+        <http:headers>#[(vars.outboundHeaders default {}) ++ {'X-Correlation-ID': correlationId}]</http:headers>
+      </http:error-response>
+    </http:listener>
+
+    <set-variable variableName="request" value="#[attributes.method ++ ' ' ++ attributes.requestPath]" doc:name="Remember request line"/>
+    <logger level="INFO" category="customer-sync-prc-api" doc:name="Log request"
+            message="#[output application/java --- 'request ' ++ vars.request]"/>
+
+    <apikit:router config-ref="customer-sync-prc-api-config" doc:name="APIkit router"/>
+
+    <logger level="INFO" category="customer-sync-prc-api" doc:name="Log response"
+            message="#[output application/java --- 'response ' ++ vars.request ++ ' status=' ++ ((vars.httpStatus default 200) as String)]"/>
+
+    <error-handler ref="global-error-handler"/>
+  </flow>
+</mule>

@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- GET /status : the last recorded run of each flow -->
+  <flow name="get:\status:customer-sync-prc-api-config" doc:name="Status">
+    <os:retrieve-all objectStore="status-store" doc:name="Read last runs"/>
+    <ee:transform doc:name="Build status">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+// Tolerates a value that was stored JSON-encoded twice.
+fun parse(value) = do {
+  var once = read(value as String, "application/json")
+  ---
+  if (once is String) read(once, "application/json") else once
+}
+fun run(key) = if (payload[key] == null) null else parse(payload[key])
+---
+{
+  invoiceSync: run("invoiceSync"),
+  customerMigration: run("customerMigration"),
+  paymentsFile: run("paymentsFile"),
+  accountEvents: run("accountEvents"),
+  reconciliation: run("reconciliation")
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+  </flow>
+
+  <!-- GET /health : this API is healthy only when both system APIs are -->
+  <flow name="get:\health:customer-sync-prc-api-config" doc:name="Health">
+    <try doc:name="Try finance">
+      <http:request config-ref="finance-api" method="GET" path="/health" responseTimeout="8000"
+                    target="financeUp" targetValue="#[output application/java --- payload.status == 'UP']" doc:name="Finance health">
+        <http:response-validator>
+          <http:success-status-code-validator values="200..599"/>
+        </http:response-validator>
+      </http:request>
+      <error-handler>
+        <on-error-continue type="ANY" logException="false" doc:name="Finance unreachable">
+          <set-variable variableName="financeUp" value="#[false]" doc:name="Down"/>
+        </on-error-continue>
+      </error-handler>
+    </try>
+    <try doc:name="Try Salesforce">
+      <http:request config-ref="sfdc-api" method="GET" path="/health" responseTimeout="15000"
+                    target="sfdcUp" targetValue="#[output application/java --- payload.status == 'UP']" doc:name="Salesforce health">
+        <http:response-validator>
+          <http:success-status-code-validator values="200..599"/>
+        </http:response-validator>
+      </http:request>
+      <error-handler>
+        <on-error-continue type="ANY" logException="false" doc:name="Salesforce unreachable">
+          <set-variable variableName="sfdcUp" value="#[false]" doc:name="Down"/>
+        </on-error-continue>
+      </error-handler>
+    </try>
+    <set-variable variableName="httpStatus" value="#[output application/java --- if (vars.financeUp and vars.sfdcUp) 200 else 503]" doc:name="200 or 503"/>
+    <set-payload doc:name="Health"
+                 value="#[output application/json --- {
+                   status: if (vars.financeUp and vars.sfdcUp) 'UP' else 'DOWN',
+                   dependencies: {
+                     'finance-sys-api': if (vars.financeUp) 'UP' else 'DOWN',
+                     'sfdc-sys-api': if (vars.sfdcUp) 'UP' else 'DOWN'
+                   }
+                 }]"/>
+  </flow>
+</mule>

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+  <!-- One way to call each system API, used by every flow.
+
+       In:  vars.req     { method, path, query }
+            vars.reqBody  JSON body, or null
+       Out: vars.res     { status, body }
+
+       Retry rule: a 5xx response or a connection failure is retried (Until
+       Successful). A 4xx response is returned to the caller without a retry,
+       because bad data will not succeed the second time. The correlation ID
+       travels with every call. -->
+
+  <sub-flow name="call-finance" doc:name="call-finance">
+    <until-successful maxRetries="${retry.max}" millisBetweenRetries="${retry.waitMillis}" doc:name="Retry transient failures">
+      <http:request config-ref="finance-api" method="#[vars.req.method]" path="#[vars.req.path]"
+                    target="res" targetValue="#[output application/java --- { status: attributes.statusCode, body: payload }]" doc:name="Finance system API">
+        <http:body>#[vars.reqBody]</http:body>
+        <http:headers>#[{ 'X-Correlation-ID': correlationId, ('Content-Type': 'application/json') if (vars.reqBody != null) }]</http:headers>
+        <http:query-params>#[vars.req.query default {}]</http:query-params>
+        <http:response-validator>
+          <http:success-status-code-validator values="200..499"/>
+        </http:response-validator>
+      </http:request>
+    </until-successful>
+  </sub-flow>
+
+  <sub-flow name="call-sfdc" doc:name="call-sfdc">
+    <until-successful maxRetries="${retry.max}" millisBetweenRetries="${retry.waitMillis}" doc:name="Retry transient failures">
+      <http:request config-ref="sfdc-api" method="#[vars.req.method]" path="#[vars.req.path]"
+                    target="res" targetValue="#[output application/java --- { status: attributes.statusCode, body: payload }]" doc:name="Salesforce system API">
+        <http:body>#[vars.reqBody]</http:body>
+        <http:headers>#[{ 'X-Correlation-ID': correlationId, ('Content-Type': 'application/json') if (vars.reqBody != null) }]</http:headers>
+        <http:query-params>#[vars.req.query default {}]</http:query-params>
+        <http:response-validator>
+          <http:success-status-code-validator values="200..499"/>
+        </http:response-validator>
+      </http:request>
+    </until-successful>
+  </sub-flow>
+
+  <!-- Records the payload as the last run of vars.statusKey. -->
+  <sub-flow name="record-status" doc:name="record-status">
+    <os:store key="#[vars.statusKey]" objectStore="status-store" doc:name="Store last run">
+      <os:value>#[output application/java --- write(payload, 'application/json')]</os:value>
+    </os:store>
+  </sub-flow>
+</mule>

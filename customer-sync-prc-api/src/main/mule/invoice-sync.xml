@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- Flow 2: invoice sync, on a schedule. -->
+  <flow name="invoice-sync-schedule" initialState="${invoiceSync.schedulerState}" doc:name="invoice-sync-schedule">
+    <scheduler doc:name="Every few minutes">
+      <scheduling-strategy>
+        <fixed-frequency frequency="${invoiceSync.frequencyMinutes}" timeUnit="MINUTES" startDelay="1"/>
+      </scheduling-strategy>
+    </scheduler>
+    <set-variable variableName="fullSync" value="#[false]" doc:name="Incremental"/>
+    <set-variable variableName="trigger" value="schedule" doc:name="Trigger"/>
+    <flow-ref name="sync-invoices" doc:name="Sync invoices"/>
+    <error-handler>
+      <on-error-continue type="ANY" logException="false" doc:name="Log and wait for the next run">
+        <logger level="ERROR" category="customer-sync-prc-api" doc:name="Log failure"
+                message="#['scheduled invoice sync failed type=$(error.errorType.namespace):$(error.errorType.identifier) description=$(error.description default '')']"/>
+      </on-error-continue>
+    </error-handler>
+  </flow>
+
+  <!-- Flow 2: invoice sync, on request. POST /sync/invoices?full=true|false -->
+  <flow name="post:\sync\invoices:customer-sync-prc-api-config" doc:name="Sync invoices now">
+    <set-variable variableName="fullSync" value="#[(attributes.queryParams.full default 'false') as String == 'true']" doc:name="Full or incremental"/>
+    <set-variable variableName="trigger" value="request" doc:name="Trigger"/>
+    <flow-ref name="sync-invoices" doc:name="Sync invoices"/>
+  </flow>
+
+  <!-- The sync itself. In: vars.fullSync, vars.trigger. Out: payload = run summary.
+
+       The watermark is moved only after Salesforce has accepted every record.
+       If anything fails, the next run reads the same invoices again, and the
+       upsert on the invoice number makes that harmless. -->
+  <flow name="sync-invoices" doc:name="sync-invoices">
+    <set-variable variableName="startedAt" value="#[now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ssXXX&quot;}]" doc:name="Started"/>
+    <set-variable variableName="req" value="#[{ method: 'GET', path: '/watermarks/' ++ p('invoiceSync.watermarkName') }]" doc:name="Read watermark"/>
+    <set-variable variableName="reqBody" value="#[null]" doc:name="No body"/>
+    <flow-ref name="call-finance" doc:name="Finance system API"/>
+    <set-variable variableName="watermarkBefore" doc:name="Watermark to read from"
+                  value="#[if (vars.fullSync default false) '2000-01-01T00:00:00.000000' else if (vars.res.status == 200) vars.res.body.value else '2000-01-01T00:00:00.000000']"/>
+
+    <set-variable variableName="req" doc:name="Read changed invoices"
+                  value="#[{ method: 'GET', path: '/invoices', query: { modifiedSince: vars.watermarkBefore, limit: p('invoiceSync.pageSize') } }]"/>
+    <flow-ref name="call-finance" doc:name="Finance system API"/>
+    <choice doc:name="Read ok?">
+      <when expression="#[vars.res.status >= 400]">
+        <raise-error type="APP:UPSTREAM_REJECTED" doc:name="Finance rejected the read"
+                     description="#['Finance system API rejected the invoice read: ' ++ (vars.res.body.error.message default ('HTTP ' ++ (vars.res.status as String)))]"/>
+      </when>
+    </choice>
+    <set-variable variableName="page" value="#[vars.res.body]" doc:name="Remember page"/>
+    <set-variable variableName="upsert" value="#[{ total: 0, succeeded: 0, failed: 0, results: [] }]" doc:name="Nothing sent yet"/>
+    <set-variable variableName="watermarkAfter" value="#[vars.watermarkBefore]" doc:name="Watermark unchanged so far"/>
+
+    <choice doc:name="Anything to send?">
+      <when expression="#[vars.page.count > 0]">
+        <ee:transform doc:name="Map invoices to Salesforce">
+          <ee:variables>
+            <ee:set-variable variableName="reqBody" resource="dw/invoices-to-salesforce.dwl"/>
+          </ee:variables>
+        </ee:transform>
+        <set-variable variableName="req" value="#[{ method: 'PUT', path: '/invoices' }]" doc:name="Upsert invoices"/>
+        <flow-ref name="call-sfdc" doc:name="Salesforce system API"/>
+        <choice doc:name="Upsert ok?">
+          <when expression="#[vars.res.status >= 400]">
+            <raise-error type="APP:UPSTREAM_REJECTED" doc:name="Salesforce rejected the batch"
+                         description="#['Salesforce system API rejected the invoice batch: ' ++ (vars.res.body.error.message default ('HTTP ' ++ (vars.res.status as String)))]"/>
+          </when>
+        </choice>
+        <set-variable variableName="upsert" value="#[vars.res.body]" doc:name="Remember result"/>
+        <choice doc:name="Every record accepted?">
+          <when expression="#[vars.upsert.failed == 0]">
+            <set-variable variableName="reqBody" value="#[output application/json --- { value: vars.page.nextWatermark }]" doc:name="New watermark"/>
+            <set-variable variableName="req" value="#[{ method: 'PUT', path: '/watermarks/' ++ p('invoiceSync.watermarkName') }]" doc:name="Move watermark"/>
+            <flow-ref name="call-finance" doc:name="Finance system API"/>
+            <set-variable variableName="watermarkAfter" value="#[vars.page.nextWatermark]" doc:name="Watermark moved"/>
+          </when>
+        </choice>
+      </when>
+    </choice>
+
+    <ee:transform doc:name="Build summary">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var failures = (vars.upsert.results default []) filter ((r) -> not r.success)
+---
+{
+  startedAt: vars.startedAt,
+  finishedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"},
+  trigger: vars.trigger default "request",
+  mode: if (vars.fullSync default false) "full" else "incremental",
+  invoicesRead: vars.page.count,
+  created: sizeOf((vars.upsert.results default []) filter ((r) -> r.success and r.created)),
+  updated: sizeOf((vars.upsert.results default []) filter ((r) -> r.success and not r.created)),
+  failed: vars.upsert.failed default 0,
+  watermarkBefore: vars.watermarkBefore,
+  watermarkAfter: vars.watermarkAfter,
+  watermarkMoved: vars.watermarkAfter != vars.watermarkBefore,
+  failures: failures map ((r) -> { invoiceNumber: r.key, errors: r.errors })
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+    <set-variable variableName="statusKey" value="invoiceSync" doc:name="Status key"/>
+    <flow-ref name="record-status" doc:name="Record run"/>
+    <logger level="INFO" category="customer-sync-prc-api" doc:name="Log run"
+            message="#[output application/java --- 'invoice sync mode=' ++ payload.mode ++ ' read=' ++ (payload.invoicesRead as String) ++ ' created=' ++ (payload.created as String) ++ ' updated=' ++ (payload.updated as String) ++ ' failed=' ++ (payload.failed as String) ++ ' watermarkMoved=' ++ (payload.watermarkMoved as String)]"/>
+  </flow>
+</mule>

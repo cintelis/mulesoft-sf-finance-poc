@@ -1,0 +1,147 @@
+#%RAML 1.0
+title: Customer Sync Process API
+version: v1
+description: |
+  Process API that keeps Salesforce and the finance system in step. It owns the
+  business rules: which system is the source of truth for what, how fields map,
+  what is retried and what is rejected. It talks only to the two system APIs,
+  never to Salesforce or the database directly.
+
+  Every operation is safe to repeat. Each run is recorded and can be read back
+  from `/status`.
+
+  Send `X-Correlation-ID` to trace a request. It is passed to both system APIs,
+  echoed on every response and written to every log line.
+mediaType: application/json
+protocols: [HTTP, HTTPS]
+
+types:
+  AccountEvent:
+    type: object
+    description: An Account change, as forwarded by the Salesforce system API.
+    properties:
+      eventId?: string
+      replayId?: number | string | nil
+      changeType:
+        type: string
+        description: CREATE, UPDATE, DELETE or UNDELETE.
+      accountIds:
+        type: string[]
+        minItems: 1
+      changedFields?: string[]
+      committedAt?: number | string | nil
+      changeOrigin?: string | nil
+
+  RunSummary:
+    type: object
+    description: The outcome of a run. The fields depend on the operation.
+    additionalProperties: true
+
+  Error:
+    type: object
+    properties:
+      error:
+        type: object
+        properties:
+          code: string
+          message: string
+          correlationId: string
+          timestamp: string
+
+traits:
+  hasErrors:
+    responses:
+      400:
+        description: The request failed validation.
+        body: Error
+      502:
+        description: A system API rejected a request it should have accepted.
+        body: Error
+      503:
+        description: A system API is unavailable after retries. Safe to repeat.
+        body: Error
+
+/health:
+  get:
+    description: Liveness check, including both system APIs.
+    responses:
+      200:
+        body: RunSummary
+      503:
+        body: RunSummary
+
+/status:
+  get:
+    description: The last recorded run of each flow.
+    responses:
+      200:
+        body: RunSummary
+
+/account-events:
+  post:
+    is: [hasErrors]
+    description: |
+      Flow 1, customer sync. For each Account in the event: read the full
+      Account, map it to a finance customer and upsert it. Deletes are skipped.
+      Bad data is reported per Account and is not retried.
+    body: AccountEvent
+    responses:
+      200:
+        body: RunSummary
+
+/sync/invoices:
+  post:
+    is: [hasErrors]
+    description: |
+      Flow 2, invoice sync. Reads finance invoices changed since the watermark,
+      upserts them to Salesforce, and moves the watermark only if Salesforce
+      accepted every record. Also runs on a schedule.
+    queryParameters:
+      full?:
+        type: boolean
+        default: false
+        description: Ignore the watermark and send every invoice. Safe, because the upsert is idempotent.
+    responses:
+      200:
+        body: RunSummary
+
+/payments/files:
+  post:
+    is: [hasErrors]
+    description: |
+      Flow 3, payments file. Validates and converts each CSV row, applies the
+      valid ones in finance, reports every row as applied, duplicate or
+      rejected, then runs the invoice sync so Salesforce shows the new status.
+    queryParameters:
+      fileName?:
+        type: string
+        default: upload.csv
+    body:
+      text/csv:
+        type: string
+    responses:
+      200:
+        body:
+          application/json: RunSummary
+
+/migrations/customers:
+  post:
+    is: [hasErrors]
+    description: |
+      One-off historical load. Creates a Salesforce Account for each finance
+      customer that has none, records the new Account ID in finance, then runs a
+      full invoice sync so existing invoices link to their Accounts.
+    responses:
+      200:
+        body: RunSummary
+
+/reconciliation/customers:
+  get:
+    is: [hasErrors]
+    description: |
+      Compares customers in both systems. Each side produces a SHA-256 hash of
+      the synced fields; the report lists matches, mismatches and records
+      present on one side only.
+    responses:
+      200:
+        body: RunSummary

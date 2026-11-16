@@ -1,0 +1,26 @@
+# Local development: both system APIs on the same machine.
+http:
+  port: "8083"
+
+financeApi:
+  host: "localhost"
+  port: "8081"
+  basePath: "/api"
+
+sfdcApi:
+  host: "localhost"
+  port: "8082"
+  basePath: "/api"
+
+# Transient failures (a system API down or returning 5xx) are retried.
+# 4xx responses are not: bad data will not get better on a second try.
+retry:
+  max: "3"
+  waitMillis: "2000"
+
+invoiceSync:
+  # started | stopped
+  schedulerState: "started"
+  frequencyMinutes: "5"
+  pageSize: "200"
+  watermarkName: "invoice-sync"

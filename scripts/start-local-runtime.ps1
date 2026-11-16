@@ -61,4 +61,6 @@ $env:JAVA_HOME = $jdk.FullName
 $env:MULE_HOME = $runtime.FullName
 Write-Host "Starting $($runtime.Name) with $($jdk.Name)"
 Set-Location (Join-Path $runtime.FullName 'bin')
-& (Join-Path $runtime.FullName 'bin\mule.bat') console
+# The default class-metadata limit (256 MB) is too small for several apps in one
+# runtime: the third app fails with "OutOfMemoryError: Metaspace".
+& (Join-Path $runtime.FullName 'bin\mule.bat') console '-M-XX:MaxMetaspaceSize=1024m'

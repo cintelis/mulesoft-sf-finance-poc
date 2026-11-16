@@ -25,12 +25,12 @@
 
     <set-variable variableName="request" value="#[attributes.method ++ ' ' ++ attributes.requestPath]" doc:name="Remember request line"/>
     <logger level="INFO" category="finance-sys-api" doc:name="Log request"
-            message="#['request ' ++ vars.request]"/>
+            message="#[output application/java --- 'request ' ++ vars.request]"/>
 
     <apikit:router config-ref="finance-sys-api-config" doc:name="APIkit router"/>
 
     <logger level="INFO" category="finance-sys-api" doc:name="Log response"
-            message="#['response ' ++ vars.request ++ ' status=' ++ ((vars.httpStatus default 200) as String)]"/>
+            message="#[output application/java --- 'response ' ++ vars.request ++ ' status=' ++ ((vars.httpStatus default 200) as String)]"/>
 
     <error-handler ref="global-error-handler"/>
   </flow>

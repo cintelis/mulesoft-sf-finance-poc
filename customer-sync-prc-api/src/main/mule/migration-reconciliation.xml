@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- Historical customer migration. POST /migrations/customers
+
+       1. Read finance customers that have no Salesforce Account.
+       2. Upsert them into Salesforce on the finance customer code.
+       3. Record each new Account ID against its finance customer.
+       4. Run a full invoice sync, so existing invoices link to their Accounts.
+
+       Safe to run again: step 1 finds nothing once everyone is linked, and the
+       upsert in step 2 cannot create a second Account for the same code. -->
+  <flow name="post:\migrations\customers:customer-sync-prc-api-config" doc:name="Migrate customers">
+    <set-variable variableName="startedAt" value="#[now() as String {format: &quot;yyyy-MM-dd'T'HH:mm:ssXXX&quot;}]" doc:name="Started"/>
+    <set-variable variableName="req" value="#[{ method: 'GET', path: '/customers', query: { linked: 'false' } }]" doc:name="Read unlinked customers"/>
+    <set-variable variableName="reqBody" value="#[null]" doc:name="No body"/>
+    <flow-ref name="call-finance" doc:name="Finance system API"/>
+    <choice doc:name="Read ok?">
+      <when expression="#[vars.res.status >= 400]">
+        <raise-error type="APP:UPSTREAM_REJECTED" doc:name="Finance rejected the read"
+                     description="#['Finance system API rejected the customer read: ' ++ (vars.res.body.error.message default ('HTTP ' ++ (vars.res.status as String)))]"/>
+      </when>
+    </choice>
+    <set-variable variableName="customers" value="#[vars.res.body.items default []]" doc:name="Remember customers"/>
+    <set-variable variableName="upsert" value="#[{ total: 0, succeeded: 0, failed: 0, results: [] }]" doc:name="Nothing sent yet"/>
+    <set-variable variableName="links" value="#[[]]" doc:name="No links yet"/>
+    <set-variable variableName="invoiceSync" value="#[null]" doc:name="No sync yet"/>
+
+    <choice doc:name="Anyone to migrate?">
+      <when expression="#[sizeOf(vars.customers) > 0]">
+        <ee:transform doc:name="Map customers to Accounts">
+          <ee:variables>
+            <ee:set-variable variableName="reqBody" resource="dw/customers-to-accounts.dwl"/>
+          </ee:variables>
+        </ee:transform>
+        <set-variable variableName="req" value="#[{ method: 'PUT', path: '/accounts' }]" doc:name="Upsert Accounts"/>
+        <flow-ref name="call-sfdc" doc:name="Salesforce system API"/>
+        <choice doc:name="Upsert ok?">
+          <when expression="#[vars.res.status >= 400]">
+            <raise-error type="APP:UPSTREAM_REJECTED" doc:name="Salesforce rejected the batch"
+                         description="#['Salesforce system API rejected the Account batch: ' ++ (vars.res.body.error.message default ('HTTP ' ++ (vars.res.status as String)))]"/>
+          </when>
+        </choice>
+        <set-variable variableName="upsert" value="#[vars.res.body]" doc:name="Remember result"/>
+
+        <foreach collection="#[vars.upsert.results filter ((r) -> r.success)]" doc:name="Each new Account">
+          <set-variable variableName="created" value="#[payload]" doc:name="Account"/>
+          <set-variable variableName="reqBody" value="#[output application/json --- { sfAccountId: vars.created.id }]" doc:name="Link body"/>
+          <set-variable variableName="req" value="#[{ method: 'PUT', path: '/customer-links/' ++ vars.created.key }]" doc:name="Link customer"/>
+          <flow-ref name="call-finance" doc:name="Finance system API"/>
+          <set-variable variableName="links" doc:name="Add link"
+                        value="#[vars.links ++ [{ customerCode: vars.created.key, sfAccountId: vars.created.id, linked: vars.res.status &lt; 400 }]]"/>
+        </foreach>
+
+        <set-variable variableName="fullSync" value="#[true]" doc:name="Full"/>
+        <set-variable variableName="trigger" value="migration" doc:name="Trigger"/>
+        <flow-ref name="sync-invoices" doc:name="Sync invoices"/>
+        <set-variable variableName="invoiceSync" value="#[output application/java --- payload]" doc:name="Remember sync"/>
+      </when>
+    </choice>
+
+    <ee:transform doc:name="Build summary">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var failures = (vars.upsert.results default []) filter ((r) -> not r.success)
+---
+{
+  startedAt: vars.startedAt,
+  finishedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"},
+  customersFound: sizeOf(vars.customers),
+  accountsCreated: sizeOf((vars.upsert.results default []) filter ((r) -> r.success and r.created)),
+  accountsUpdated: sizeOf((vars.upsert.results default []) filter ((r) -> r.success and not r.created)),
+  accountsFailed: sizeOf(failures),
+  customersLinked: sizeOf(vars.links filter ((l) -> l.linked)),
+  failures: failures map ((r) -> { customerCode: r.key, errors: r.errors }),
+  links: vars.links,
+  invoiceSync: vars.invoiceSync
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+    <set-variable variableName="statusKey" value="customerMigration" doc:name="Status key"/>
+    <flow-ref name="record-status" doc:name="Record run"/>
+    <logger level="INFO" category="customer-sync-prc-api" doc:name="Log migration"
+            message="#[output application/java --- 'customer migration found=' ++ (payload.customersFound as String) ++ ' created=' ++ (payload.accountsCreated as String) ++ ' linked=' ++ (payload.customersLinked as String) ++ ' failed=' ++ (payload.accountsFailed as String)]"/>
+  </flow>
+
+  <!-- Reconciliation. GET /reconciliation/customers -->
+  <flow name="get:\reconciliation\customers:customer-sync-prc-api-config" doc:name="Reconcile customers">
+    <set-variable variableName="reqBody" value="#[null]" doc:name="No body"/>
+    <set-variable variableName="req" value="#[{ method: 'GET', path: '/recon/customers' }]" doc:name="Read finance hashes"/>
+    <flow-ref name="call-finance" doc:name="Finance system API"/>
+    <choice doc:name="Read ok?">
+      <when expression="#[vars.res.status >= 400]">
+        <raise-error type="APP:UPSTREAM_REJECTED" description="Finance system API rejected the reconciliation read." doc:name="Finance rejected the read"/>
+      </when>
+    </choice>
+    <set-variable variableName="financeRecon" value="#[vars.res.body]" doc:name="Remember finance side"/>
+    <set-variable variableName="req" value="#[{ method: 'GET', path: '/accounts' }]" doc:name="Read Accounts"/>
+    <flow-ref name="call-sfdc" doc:name="Salesforce system API"/>
+    <choice doc:name="Read ok?">
+      <when expression="#[vars.res.status >= 400]">
+        <raise-error type="APP:UPSTREAM_REJECTED" description="Salesforce system API rejected the Account read." doc:name="Salesforce rejected the read"/>
+      </when>
+    </choice>
+    <set-variable variableName="accounts" value="#[vars.res.body]" doc:name="Remember Salesforce side"/>
+    <ee:transform doc:name="Build report">
+      <ee:message>
+        <ee:set-payload resource="dw/reconciliation-report.dwl"/>
+      </ee:message>
+    </ee:transform>
+    <set-variable variableName="statusKey" value="reconciliation" doc:name="Status key"/>
+    <flow-ref name="record-status" doc:name="Record run"/>
+    <logger level="INFO" category="customer-sync-prc-api" doc:name="Log report"
+            message="#[output application/java --- 'reconciliation inSync=' ++ (payload.inSync as String) ++ ' matched=' ++ (payload.matchedCount as String) ++ ' mismatched=' ++ (sizeOf(payload.mismatched) as String)]"/>
+  </flow>
+</mule>

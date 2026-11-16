@@ -29,7 +29,8 @@ mappings. The diagrams are editable `.drawio.svg` files in `docs/assets/`.
 | `salesforce/` | Salesforce metadata: `Invoice__c`, Account fields, Change Data Capture, permission set | Deployed |
 | `sfdc-sys-api/` | System API over Salesforce | Runs against the Developer Edition org: JWT login, invoice upsert and account reads verified. Change Data Capture listener and account upsert not yet exercised |
 | `payments-file-sys-api/` | System API over the SFTP feed | Not started |
-| `customer-sync-prc-api/` | Process API: orchestration, mappings, reconciliation | Not started |
+| `customer-sync-prc-api/` | Process API: customer sync, invoice sync, payments file, migration, reconciliation | Runs locally. Invoice sync, payments file and reconciliation verified; migration and live Account events not yet run |
+| `dashboard/` | Local single-page view of all components, connections, errors and flow buttons | Working |
 | `docs/` | [Integration design](docs/architecture.md) with diagrams and field mappings | Design written; runbook not started |
 
 ## Run the local systems
@@ -124,3 +125,20 @@ sf org assign permset --name Finance_Integration --target-org <alias>
 No credentials are stored in this repository. `infra/.env` is git-ignored;
 `infra/.env.example` holds placeholder values for the local Docker containers
 only.
+
+## Dashboard
+
+One page that shows every component, whether it is up, the record counts on
+each side, the connections between them, and recent errors. It also has a
+button for each flow.
+
+```powershell
+node dashboard\server.js        # then open http://localhost:8090
+```
+
+- Click a component or a connection line for details, errors and rejected requests.
+- The buttons call the process API: migrate customers, sync invoices, reconcile, process a sample payments file.
+- Errors come from the Mule apps' JSON log files. Record counts for Salesforce come from the Salesforce CLI (org alias `poc`, or set `SF_ORG_ALIAS`).
+
+It needs Node 18 or later and no packages. It listens on localhost only, because
+its buttons write to the finance database and to Salesforce.

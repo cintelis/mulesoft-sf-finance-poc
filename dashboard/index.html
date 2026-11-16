@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integration dashboard</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #18202b; --muted: #5f6b7a; --line: #d8dde5;
+    --up: #1f8a4c; --down: #c0392b; --off: #9aa3af; --warn: #b7791f; --accent: #2456c7;
+    --sf: #eaf2fd; --sf-line: #9db9ea; --mule: #ecf7f0; --mule-line: #9ccbae; --prem: #fff7e6; --prem-line: #e6c27a;
+    --node: #ffffff; --shadow: 0 1px 2px rgba(16,24,40,.08), 0 2px 8px rgba(16,24,40,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151b; --panel: #181e27; --ink: #e6eaf0; --muted: #9aa5b4; --line: #2c3542;
+      --up: #4cc38a; --down: #f0776a; --off: #6b7684; --warn: #e0a84a; --accent: #7ea6ff;
+      --sf: #16233a; --sf-line: #35548c; --mule: #14281d; --mule-line: #2f6a48; --prem: #2b2412; --prem-line: #7c6327;
+      --node: #1e2631; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink);
+         display: grid; grid-template-rows: auto 1fr; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 650; }
+  #stamp { color: var(--muted); font-size: 12px; margin-right: auto; }
+  button, select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.busy { border-color: var(--warn); color: var(--warn); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 7px var(--side, 380px); min-height: 0; }
+  #splitter { cursor: col-resize; background: var(--line); touch-action: none; }
+  #splitter:hover, #splitter.active, #splitter:focus-visible { background: var(--accent); outline: none; }
+  #canvas { position: relative; overflow: hidden; cursor: grab; }
+  #canvas.dragging { cursor: grabbing; }
+  svg { width: 100%; height: 100%; display: block; user-select: none; }
+  #hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--line); padding: 3px 8px; border-radius: 6px; }
+  aside { background: var(--panel); overflow: auto; padding: 14px 16px 28px; min-width: 0; }
+  aside h2 { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 18px 0 8px; font-weight: 650; }
+  aside h2:first-child { margin-top: 0; }
+  .zone { stroke-width: 1.2; rx: 10; }
+  .zone-title { font-size: 13px; font-weight: 650; fill: var(--muted); }
+  .node rect { fill: var(--node); stroke: var(--line); stroke-width: 1.2; rx: 9; filter: drop-shadow(0 1px 2px rgba(16,24,40,.10)); }
+  .node { cursor: pointer; }
+  .node:hover rect, .node.selected rect { stroke: var(--accent); stroke-width: 2; }
+  .node.off rect { stroke-dasharray: 5 4; }
+  .node .title { font-size: 13.5px; font-weight: 650; fill: var(--ink); }
+  .node .sub { font-size: 11.5px; fill: var(--muted); }
+  .node .metric { font-size: 12px; fill: var(--ink); }
+  .dot.up { fill: var(--up); } .dot.down { fill: var(--down); } .dot.off { fill: var(--off); } .dot.unknown { fill: var(--warn); }
+  .edge { fill: none; stroke: var(--off); stroke-width: 1.6; }
+  .edge.live { stroke: var(--accent); stroke-dasharray: 6 5; animation: flow 1.1s linear infinite; }
+  .edge.event.live { stroke: var(--down); }
+  @keyframes flow { to { stroke-dashoffset: -22; } }
+  @media (prefers-reduced-motion: reduce) { .edge.live { animation: none; } }
+  .edge-label { font-size: 11px; fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; }
+  .edge.selected { stroke-width: 3.2; stroke: var(--accent); }
+  .edge-hit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
+  .edge-hit:hover + .edge-label, .edge-label.selected { fill: var(--accent); font-weight: 650; }
+  .badge circle.error { fill: var(--down); } .badge circle.rejected { fill: var(--warn); }
+  .badge text { fill: #fff; font-size: 10.5px; font-weight: 700; text-anchor: middle; pointer-events: none; }
+  .issue { border-left: 3px solid var(--line); padding: 4px 0 4px 9px; margin: 0 0 8px; }
+  .issue.error { border-color: var(--down); } .issue.rejected, .issue.warning { border-color: var(--warn); }
+  .issue .meta { color: var(--muted); font-size: 12px; }
+  .issue .msg { overflow-wrap: anywhere; }
+  .issue code { font-size: 11.5px; }
+  h3 { font-size: 13px; margin: 14px 0 6px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
+  .pill.up { color: var(--up); border-color: var(--up); } .pill.down { color: var(--down); border-color: var(--down); }
+  .pill.off { color: var(--off); } .pill.unknown { color: var(--warn); border-color: var(--warn); }
+  a { color: var(--accent); }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; }
+  .card .head { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+  .card .when { color: var(--muted); font-weight: 400; font-size: 12px; white-space: nowrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+  .chip { font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+  .card.failed { border-color: var(--down); }
+  details { margin-top: 6px; } summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  pre { margin: 6px 0 0; padding: 8px; background: var(--bg); border-radius: 6px; font-size: 11.5px; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .empty { color: var(--muted); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; grid-template-rows: 60vh auto; } #splitter { display: none; } aside { border-top: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Salesforce to finance integration</h1>
+  <span id="stamp">Loading…</span>
+  <button data-action="migrate-customers" title="Create Salesforce Accounts for finance customers that have none, then link them">Migrate customers</button>
+  <button data-action="sync-invoices" title="Send invoices changed since the watermark to Salesforce">Sync invoices</button>
+  <button data-action="sync-invoices-full" title="Send every invoice again. Safe: the upsert is idempotent">Full resync</button>
+  <button data-action="reconcile" title="Compare customers in both systems by hash">Reconcile</button>
+  <select id="sample" title="Sample payments file"></select>
+  <button data-action="process-payments" title="Process the selected payments CSV">Process payments file</button>
+</header>
+<main>
+  <div id="canvas">
+    <svg id="svg" role="img" aria-label="Integration components and connections">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/>
+        </marker>
+      </defs>
+      <g id="world"></g>
+    </svg>
+    <div id="hint">Drag to pan · scroll to zoom · click a component or a line for details and errors</div>
+  </div>
+  <div id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize the details panel" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+  <aside>
+    <h2>Selected component or connection</h2>
+    <div id="detail" class="empty">Click a component or a connection line on the canvas.</div>
+    <h2>Activity this session</h2>
+    <div id="activity" class="empty">Nothing run yet.</div>
+    <h2>Last runs recorded by the process API</h2>
+    <div id="runs" class="empty">Process API not reachable.</div>
+  </aside>
+</main>
+<script>
+const W = 216, H = 86;
+const ZONES = [
+  { id: 'sf', label: 'Salesforce', x: 30, y: 40, w: 300, h: 640, fill: 'var(--sf)', stroke: 'var(--sf-line)' },
+  { id: 'mule', label: 'MuleSoft (local Mule runtime)', x: 380, y: 40, w: 620, h: 640, fill: 'var(--mule)', stroke: 'var(--mule-line)' },
+  { id: 'prem', label: 'On-premises finance (Docker)', x: 1050, y: 40, w: 300, h: 640, fill: 'var(--prem)', stroke: 'var(--prem-line)' },
+];
+const NODES = [
+  { id: 'accounts', x: 72, y: 100, title: 'Accounts', sub: 'Salesforce object' },
+  { id: 'cdc', x: 72, y: 245, title: 'Change Data Capture', sub: 'AccountChangeEvent' },
+  { id: 'sfInvoices', x: 72, y: 390, title: 'Invoices', sub: 'Invoice__c object' },
+  { id: 'eca', x: 72, y: 535, title: 'External Client App', sub: 'Finance POC Mule Integration' },
+  { id: 'prc', x: 582, y: 100, title: 'customer-sync-prc-api', sub: 'Process API · port 8083' },
+  { id: 'sfdc', x: 420, y: 330, title: 'sfdc-sys-api', sub: 'System API · port 8082' },
+  { id: 'finance', x: 744, y: 330, title: 'finance-sys-api', sub: 'System API · port 8081' },
+  { id: 'paymentsFile', x: 582, y: 535, title: 'payments-file-sys-api', sub: 'System API · SFTP' },
+  { id: 'oracle', x: 1092, y: 330, title: 'Oracle database', sub: 'finance-db container' },
+  { id: 'sftp', x: 1092, y: 535, title: 'SFTP server', sub: 'legacy-sftp container' },
+];
+const EDGES = [
+  { from: 'accounts', to: 'cdc', label: 'change captured', kind: 'event' },
+  { from: 'cdc', to: 'sfdc', label: 'event stream', kind: 'event', a: 'right', b: 'left' },
+  { from: 'sfdc', to: 'prc', label: 'events up · upserts down', both: true },
+  { from: 'sfdc', to: 'accounts', label: 'read · upsert', a: 'top', b: 'right' },
+  { from: 'sfdc', to: 'sfInvoices', label: 'upsert' },
+  { from: 'eca', to: 'sfdc', label: 'JWT login', kind: 'auth', a: 'right', b: 'bottom' },
+  { from: 'prc', to: 'finance', label: 'customers · invoices · payments' },
+  { from: 'prc', to: 'paymentsFile', label: 'files', a: 'bottom', b: 'top' },
+  { from: 'finance', to: 'oracle', label: 'SQL · PL/SQL' },
+  { from: 'paymentsFile', to: 'sftp', label: 'SFTP' },
+];
+const ACTION_LABELS = {
+  'migrate-customers': 'Migrate customers', 'sync-invoices': 'Sync invoices', 'sync-invoices-full': 'Full resync',
+  reconcile: 'Reconcile', 'process-payments': 'Process payments file',
+};
+const RUN_LABELS = { invoiceSync: 'Invoice sync', customerMigration: 'Customer migration', paymentsFile: 'Payments file',
+  accountEvents: 'Account change event', reconciliation: 'Reconciliation' };
+
+let state = null, selected = null, view = { x: 0, y: 0, k: 1 };   // selected: { type: 'node' | 'edge', id }
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const num = (v) => (v === null || v === undefined ? '–' : v);
+
+// What each component looks like right now: status, the lines on its card, and its details.
+function describe(id, s) {
+  const a = s.apis, f = s.finance, sf = s.salesforce || {}, c = s.containers || {}, links = sf.links || {};
+  const api = (x, backendLabel) => ({
+    status: x.up ? 'up' : 'down',
+    lines: [x.up ? 'Running' : x.detail],
+    facts: [['Address', x.url], ['Health', x.detail]].concat(backendLabel && x.backendUp !== null ? [[backendLabel, x.backendUp ? 'Reachable' : 'Unreachable']] : []),
+  });
+  switch (id) {
+    case 'accounts': return { status: sf.accounts == null ? 'unknown' : 'up', lines: [`${num(sf.accounts)} records`],
+      facts: [['Accounts in Salesforce', num(sf.accounts)], ['Finance customers linked', `${num(f.customersLinked)} of ${num(f.customers)}`]], link: links.accounts, linkText: 'Open Accounts in Salesforce' };
+    case 'cdc': return { status: a.sfdc.up ? 'up' : 'unknown', lines: [a.sfdc.up ? 'Subscribed' : 'Listener not running'],
+      facts: [['Channel', '/data/AccountChangeEvent'], ['Subscriber', 'sfdc-sys-api'], ['Replay', 'Resumes from last event']], link: links.changeDataCapture, linkText: 'Open Change Data Capture setup' };
+    case 'sfInvoices': return { status: sf.invoices == null ? 'unknown' : 'up', lines: [`${num(sf.invoices)} records`],
+      facts: [['Invoices in Salesforce', num(sf.invoices)], ['Invoices in finance', num(f.invoices)], ['Upsert key', 'Invoice_Number__c']], link: links.invoices, linkText: 'Open All Invoices in Salesforce' };
+    case 'eca': return { status: a.sfdc.backendUp ? 'up' : (a.sfdc.reachable ? 'down' : 'unknown'), lines: [a.sfdc.backendUp ? 'Login working' : 'Login not confirmed'],
+      facts: [['Flow', 'OAuth 2.0 JWT bearer'], ['Permitted users', 'Admin approved'], ['Permission set', 'Finance Integration']], link: links.externalClientApp, linkText: 'Open External Client App Manager' };
+    case 'prc': { const d = api(a.prc); if (a.prc.dependencies) d.facts.push(...Object.entries(a.prc.dependencies)); d.note = 'Orchestrates the flows: maps fields, retries, records each run.'; return d; }
+    case 'sfdc': { const d = api(a.sfdc, 'Salesforce'); d.note = 'Wraps Salesforce: upserts on external IDs and listens for Account changes.'; return d; }
+    case 'finance': { const d = api(a.finance, 'Database'); d.note = 'Wraps the Oracle schema and its stored procedures.'; return d; }
+    case 'paymentsFile': return { status: 'off', lines: ['Not built yet'], facts: [['Planned', 'Polls the SFTP inbound folder']], note: 'Until it exists, the dashboard sends sample files straight to the process API.' };
+    case 'oracle': { const up = c['finance-db'] && c['finance-db'].up; return { status: c['finance-db'] ? (up && a.finance.backendUp !== false ? 'up' : 'down') : 'unknown',
+      lines: [`${num(f.customers)} customers · ${num(f.invoices)} invoices`],
+      facts: [['Container', c['finance-db'] ? c['finance-db'].status : 'Unknown'], ['Customers', num(f.customers)], ['Linked to Salesforce', num(f.customersLinked)], ['Invoices', num(f.invoices)],
+        ...Object.entries(f.invoicesByStatus || {}).map(([k, v]) => [`Invoices ${k}`, v])] }; }
+    case 'sftp': { const up = c['legacy-sftp'] && c['legacy-sftp'].up; return { status: c['legacy-sftp'] ? (up ? 'up' : 'down') : 'unknown', lines: [`${num(s.sftp.inbound)} file(s) in inbound`],
+      facts: [['Container', c['legacy-sftp'] ? c['legacy-sftp'].status : 'Unknown'], ['Inbound', num(s.sftp.inbound)], ['Archive', num(s.sftp.archive)], ['Error', num(s.sftp.error)]] }; }
+  }
+}
+
+// What crosses each connection, shown when a line is clicked.
+const EDGE_INFO = {
+  'accounts>cdc': ['Salesforce publishes an event whenever an Account is created or edited.', 'Platform event, inside Salesforce'],
+  'cdc>sfdc': ['sfdc-sys-api holds a subscription to the Account change channel and receives each event.', 'Streaming subscription, opened outbound from Mule'],
+  'sfdc>prc': ['Up: Account change events forwarded to the process API. Down: Account and invoice upserts, and Account reads.', 'HTTP + JSON, correlation ID on every call'],
+  'sfdc>accounts': ['Reads Accounts, and upserts them on the finance customer code during migration.', 'Salesforce API over HTTPS'],
+  'sfdc>sfInvoices': ['Upserts invoices on the invoice number, so repeats never duplicate.', 'Salesforce API over HTTPS'],
+  'eca>sfdc': ['sfdc-sys-api signs a token with its private key; Salesforce checks it against the certificate on the app.', 'OAuth 2.0 JWT bearer'],
+  'prc>finance': ['Customer upserts and links, invoice reads by watermark, payment applications, reconciliation hashes.', 'HTTP + JSON, retried on 5xx only'],
+  'prc>paymentsFile': ['Will list, read and archive payment files. Not built yet.', 'HTTP + JSON'],
+  'finance>oracle': ['Parameterised SQL and the upsert_customer and apply_payment stored procedures.', 'JDBC'],
+  'paymentsFile>sftp': ['Will poll the inbound folder and move processed files. Not built yet.', 'SFTP'],
+};
+const LOG_COMPONENTS = { finance: 'finance', sfdc: 'sfdc', prc: 'prc' };   // components that have a log
+const RECENT_MS = 60 * 60 * 1000;
+
+const ago = (iso) => {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  return s < 90 ? 'just now' : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : new Date(iso).toLocaleDateString();
+};
+const recent = (issues) => (issues || []).filter((i) => Date.now() - new Date(i.at).getTime() < RECENT_MS);
+function counts(issues) {
+  const r = recent(issues);
+  const total = (list) => list.reduce((sum, i) => sum + (i.count || 1), 0);
+  return { error: total(r.filter((i) => i.kind === 'error')), rejected: total(r.filter((i) => i.kind !== 'error')) };
+}
+function badge(x, y, c) {
+  let out = '';
+  if (c.error) out += `<g class="badge"><title>${c.error} error(s) in the last hour</title><circle class="error" cx="${x}" cy="${y}" r="10"/><text x="${x}" y="${y + 3.5}">${c.error > 99 ? '99+' : c.error}</text></g>`;
+  if (c.rejected) { const bx = c.error ? x - 23 : x; out += `<g class="badge"><title>${c.rejected} rejected request(s) or warning(s) in the last hour</title><circle class="rejected" cx="${bx}" cy="${y}" r="10"/><text x="${bx}" y="${y + 3.5}">${c.rejected > 99 ? '99+' : c.rejected}</text></g>`; }
+  return out;
+}
+
+const SIDES = { left: [-1, 0], right: [1, 0], top: [0, -1], bottom: [0, 1] };
+function anchor(node, toward, side) {
+  const cx = node.x + W / 2, cy = node.y + H / 2, dx = toward.x + W / 2 - cx, dy = toward.y + H / 2 - cy;
+  if (side) { const [nx, ny] = SIDES[side]; return { x: cx + nx * W / 2, y: cy + ny * H / 2, nx, ny }; }
+  if (Math.abs(dx) * H > Math.abs(dy) * W) return { x: cx + Math.sign(dx) * W / 2, y: cy, nx: Math.sign(dx), ny: 0 };
+  return { x: cx, y: cy + Math.sign(dy) * H / 2, nx: 0, ny: Math.sign(dy) };
+}
+
+// Only touch the page when the content changed, and keep opened sections open.
+// Without this, the five-second refresh would close anything you had expanded.
+function setHtml(el, html, className) {
+  if (el.dataset.html === html) return;
+  const open = new Set([...el.querySelectorAll('details[open]')].map((d) => d.dataset.k));
+  el.className = className || '';
+  el.innerHTML = html;
+  el.dataset.html = html;
+  el.querySelectorAll('details').forEach((d) => { if (open.has(d.dataset.k)) d.open = true; });
+}
+
+function render() {
+  if (!state) return;
+  const info = Object.fromEntries(NODES.map((n) => [n.id, describe(n.id, state)]));
+  const byId = Object.fromEntries(NODES.map((n) => [n.id, n]));
+  const issues = state.issues || { components: {}, connections: {} };
+  let out = '';
+  for (const z of ZONES) {
+    out += `<rect class="zone" x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="10" fill="${z.fill}" stroke="${z.stroke}"/>` +
+           `<text class="zone-title" x="${z.x + 14}" y="${z.y + 24}">${esc(z.label)}</text>`;
+  }
+  for (const e of EDGES) {
+    const id = `${e.from}>${e.to}`, A = byId[e.from], B = byId[e.to], p = anchor(A, B, e.a), q = anchor(B, A, e.b);
+    const bend = Math.max(40, Math.hypot(q.x - p.x, q.y - p.y) * 0.35);
+    const d = `M${p.x},${p.y} C${p.x + p.nx * bend},${p.y + p.ny * bend} ${q.x + q.nx * bend},${q.y + q.ny * bend} ${q.x},${q.y}`;
+    const live = info[e.from].status === 'up' && info[e.to].status === 'up';
+    const isSel = selected && selected.type === 'edge' && selected.id === id;
+    const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2;
+    out += `<path class="edge ${e.kind || ''} ${live ? 'live' : ''} ${isSel ? 'selected' : ''}" d="${d}" marker-end="url(#arrow)" ${e.both ? 'marker-start="url(#arrow)"' : ''}/>` +
+           `<path class="edge-hit" d="${d}" data-edge="${id}" tabindex="0" role="button" aria-label="Connection ${esc(A.title)} to ${esc(B.title)}"><title>Click for details and errors</title></path>` +
+           `<text class="edge-label ${isSel ? 'selected' : ''}" text-anchor="middle" x="${mx}" y="${my - 5}">${esc(e.label)}</text>` +
+           badge(mx, my + 14, counts(issues.connections[id]));
+  }
+  for (const n of NODES) {
+    const d = info[n.id], isSel = selected && selected.type === 'node' && selected.id === n.id;
+    out += `<g class="node ${d.status} ${isSel ? 'selected' : ''}" data-id="${n.id}" tabindex="0" role="button" aria-label="${esc(n.title)}: ${esc(d.lines[0])}">` +
+      `<rect x="${n.x}" y="${n.y}" width="${W}" height="${H}" rx="9"/>` +
+      `<circle class="dot ${d.status}" cx="${n.x + 16}" cy="${n.y + 21}" r="5.5"/>` +
+      `<text class="title" x="${n.x + 30}" y="${n.y + 25}">${esc(n.title)}</text>` +
+      `<text class="sub" x="${n.x + 14}" y="${n.y + 46}">${esc(n.sub)}</text>` +
+      `<text class="metric" x="${n.x + 14}" y="${n.y + 68}">${esc(d.lines[0])}</text>` +
+      (LOG_COMPONENTS[n.id] ? badge(n.x + W - 6, n.y + 4, counts(issues.components[n.id])) : '') + `</g>`;
+  }
+  const world = document.getElementById('world');
+  if (world.dataset.html !== out) { world.innerHTML = out; world.dataset.html = out; }
+  document.getElementById('stamp').textContent = 'Updated ' + new Date(state.at).toLocaleTimeString();
+  renderDetail(info, byId, issues);
+  renderRuns();
+  const prcUp = state.apis.prc.up;
+  document.querySelectorAll('button[data-action]').forEach((b) => {
+    if (!b.classList.contains('busy')) { b.disabled = !prcUp; b.title = prcUp ? b.dataset.tip || b.title : 'The process API is not running'; }
+  });
+  const sample = document.getElementById('sample');
+  if (!sample.options.length) for (const f of state.samples) sample.add(new Option(f, f));
+}
+
+const STATUS_TEXT = { up: 'Up', down: 'Down', off: 'Not built', unknown: 'Unknown' };
+const KIND_TEXT = { error: 'Error', rejected: 'Rejected', warning: 'Warning' };
+
+function issueList(issues, emptyText) {
+  if (!issues || !issues.length) return `<p class="empty" style="margin:0">${esc(emptyText)}</p>`;
+  const shown = issues.slice(0, 12);
+  return shown.map((i) => `<div class="issue ${i.kind}"><div class="meta">${KIND_TEXT[i.kind]}${i.count > 1 ? ' × ' + i.count : ''}${i.status ? ' · HTTP ' + i.status : ''} · ${esc(ago(i.at))}${i.app ? ' · ' + esc(i.app) : ''}</div>` +
+    `<div class="msg">${esc(i.message)}</div>` +
+    (i.type ? `<div class="meta">Type <code>${esc(i.type)}</code></div>` : '') +
+    (i.correlationId ? `<div class="meta">Correlation ID <code>${esc(i.correlationId)}</code></div>` : '') + `</div>`).join('') +
+    (issues.length > shown.length ? `<p class="meta" style="color:var(--muted);margin:0">${issues.length - shown.length} older not shown.</p>` : '');
+}
+
+// Records the process API turned away in its last runs. These are not faults:
+// the flows carried on, and each record says why it was refused.
+function recordRejections() {
+  const r = state.runs || {}, out = [];
+  for (const row of ((r.paymentsFile || {}).rows || []).filter((x) => x.result === 'REJECTED' || x.result === 'FAILED')) {
+    out.push(`Payments file ${esc((r.paymentsFile || {}).fileName)}, row ${row.row} (${esc(row.paymentRef || 'no reference')}): ${esc(row.reason)}`);
+  }
+  for (const f of ((r.invoiceSync || {}).failures || [])) out.push(`Invoice ${esc(f.invoiceNumber)}: ${esc((f.errors || []).join('; '))}`);
+  for (const f of ((r.customerMigration || {}).failures || [])) out.push(`Customer ${esc(f.customerCode)}: ${esc((f.errors || []).join('; '))}`);
+  for (const x of ((r.accountEvents || {}).results || []).filter((x) => x.result === 'FAILED' || x.result === 'REJECTED')) out.push(`Account ${esc(x.name || x.accountId)}: ${esc(x.detail)}`);
+  return out;
+}
+
+function renderDetail(info, byId, issues) {
+  const el = document.getElementById('detail');
+  if (!selected) return setHtml(el, 'Click a component or a connection line on the canvas.', 'empty');
+  let html;
+  if (selected.type === 'edge') {
+    const [from, to] = selected.id.split('>'), A = byId[from], B = byId[to], e = EDGES.find((x) => x.from === from && x.to === to);
+    const live = info[from].status === 'up' && info[to].status === 'up', what = EDGE_INFO[selected.id] || ['', ''];
+    const list = issues.connections[selected.id] || [];
+    html = `<p style="margin:0 0 8px"><strong>${esc(A.title)} ${e.both ? '↔' : '→'} ${esc(B.title)}</strong> <span class="pill ${live ? 'up' : 'unknown'}">${live ? 'Both ends up' : 'An end is not up'}</span></p>` +
+      `<p style="margin:0 0 8px">${esc(what[0])}</p>` +
+      `<dl class="kv"><dt>Carries</dt><dd>${esc(e.label)}</dd><dt>Protocol</dt><dd>${esc(what[1])}</dd></dl>` +
+      `<h3>Errors and rejected requests on this connection</h3>` + issueList(list, 'None found in the logs.') +
+      `<p class="meta" style="color:var(--muted);margin:8px 0 0">An issue is placed on a connection by matching its text, so some land on the component only.</p>`;
+  } else {
+    const n = byId[selected.id], d = info[selected.id];
+    html = `<p style="margin:0 0 8px"><strong>${esc(n.title)}</strong> <span class="pill ${d.status}">${STATUS_TEXT[d.status]}</span><br><span style="color:var(--muted)">${esc(n.sub)}</span></p>` +
+      (d.note ? `<p style="margin:0 0 8px">${esc(d.note)}</p>` : '') +
+      `<dl class="kv">${d.facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` +
+      (d.link ? `<p style="margin:10px 0 0"><a href="${esc(d.link)}" target="_blank" rel="noopener">${esc(d.linkText)}</a></p>` : '');
+    if (LOG_COMPONENTS[selected.id]) {
+      html += `<h3>Errors and rejected requests</h3>` + issueList(issues.components[selected.id], 'None found in this app’s log.');
+      if (selected.id === 'prc') {
+        const rej = recordRejections();
+        html += `<h3>Records refused in the last runs</h3>` + (rej.length ? `<ul style="margin:0;padding-left:18px">${rej.map((x) => `<li>${x}</li>`).join('')}</ul>` : `<p class="empty" style="margin:0">None.</p>`);
+      }
+    } else {
+      html += `<p class="meta" style="color:var(--muted);margin:10px 0 0">This component has no log the dashboard can read. Errors reaching it show on its connections.</p>`;
+    }
+  }
+  setHtml(el, html);
+}
+
+// Show the simple values of a result as chips, whatever its shape.
+function chips(obj) {
+  if (!obj || typeof obj !== 'object') return '';
+  return Object.entries(obj).filter(([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v))
+    .map(([k, v]) => `<span class="chip">${esc(k)}: ${esc(v)}</span>`).join('') +
+    Object.entries(obj).filter(([, v]) => Array.isArray(v)).map(([k, v]) => `<span class="chip">${esc(k)}: ${v.length}</span>`).join('');
+}
+
+function renderRuns() {
+  const el = document.getElementById('runs');
+  const runs = state.runs && Object.entries(state.runs).filter(([, v]) => v);
+  if (!runs || !runs.length) return setHtml(el, state.runs ? 'No runs recorded yet.' : 'Process API not reachable.', 'empty');
+  setHtml(el, runs.map(([k, v]) => `<div class="card"><div class="head"><span>${esc(RUN_LABELS[k] || k)}</span></div><div class="chips">${chips(v)}</div>` +
+    `<details data-k="run-${esc(k)}"><summary>Full record</summary><pre>${esc(JSON.stringify(v, null, 2))}</pre></details></div>`).join(''));
+}
+
+const activity = [];
+let activityId = 0;
+function renderActivity() {
+  setHtml(document.getElementById('activity'), activity.map((r) => `<div class="card ${r.ok ? '' : 'failed'}"><div class="head"><span>${esc(r.label)}</span><span class="when">${esc(r.when)} · ${r.status ? 'HTTP ' + r.status : 'failed'} · ${(r.ms / 1000).toFixed(1)}s</span></div>` +
+    `<div class="chips">${chips(r.body && r.body.error ? r.body.error : r.body)}</div>` +
+    `<details data-k="act-${r.id}"><summary>Full response</summary><pre>${esc(JSON.stringify(r.body ?? r.error, null, 2))}</pre></details></div>`).join(''));
+}
+
+async function refresh() {
+  try { state = await (await fetch('/api/state')).json(); render(); }
+  catch { document.getElementById('stamp').textContent = 'Dashboard server not reachable'; }
+}
+
+document.querySelectorAll('button[data-action]').forEach((button) => {
+  button.dataset.tip = button.title;
+  button.addEventListener('click', async () => {
+    const action = button.dataset.action, label = button.textContent;
+    button.classList.add('busy'); button.disabled = true; button.textContent = 'Running…';
+    let result;
+    try {
+      const response = await fetch('/api/actions/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file: document.getElementById('sample').value }) });
+      result = await response.json();
+    } catch (error) { result = { ok: false, status: 0, ms: 0, error: String(error) }; }
+    const file = action === 'process-payments' ? ' (' + document.getElementById('sample').value + ')' : '';
+    activity.unshift({ id: ++activityId, label: ACTION_LABELS[action] + file, when: new Date().toLocaleTimeString(), ...result });
+    renderActivity();
+    button.classList.remove('busy'); button.textContent = label;
+    await refresh();
+  });
+});
+
+// Select a component or a connection by click or keyboard.
+const world = document.getElementById('world'), canvas = document.getElementById('canvas');
+function pick(target) {
+  const node = target.closest('.node'), edge = target.closest('.edge-hit');
+  if (node) selected = { type: 'node', id: node.dataset.id };
+  else if (edge) selected = { type: 'edge', id: edge.dataset.edge };
+  else return;
+  render();
+}
+world.addEventListener('click', (e) => { if (!moved) pick(e.target); });
+world.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(e.target); } });
+
+// Pan and zoom.
+let drag = null, moved = false;
+const apply = () => world.setAttribute('transform', `translate(${view.x},${view.y}) scale(${view.k})`);
+canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX - view.x, y: e.clientY - view.y }; moved = false; });
+window.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const x = e.clientX - drag.x, y = e.clientY - drag.y;
+  if (Math.abs(x - view.x) + Math.abs(y - view.y) > 3) { moved = true; canvas.classList.add('dragging'); }
+  view.x = x; view.y = y; apply();
+});
+window.addEventListener('pointerup', () => { drag = null; canvas.classList.remove('dragging'); });
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const k = Math.min(2.5, Math.max(0.4, view.k * (e.deltaY < 0 ? 1.1 : 0.9)));
+  view.x = mx - (mx - view.x) * (k / view.k); view.y = my - (my - view.y) * (k / view.k); view.k = k; apply();
+}, { passive: false });
+function fit() {
+  const rect = canvas.getBoundingClientRect(), k = Math.min(rect.width / 1380, rect.height / 720, 1.3);
+  view = { k, x: (rect.width - 1380 * k) / 2, y: (rect.height - 720 * k) / 2 }; apply();
+}
+window.addEventListener('resize', fit);
+
+// Drag the divider to resize the right panel. The width is remembered.
+const splitter = document.getElementById('splitter'), mainEl = document.querySelector('main');
+function setSide(px) {
+  const width = Math.round(Math.min(Math.max(px, 280), window.innerWidth * 0.7));
+  mainEl.style.setProperty('--side', width + 'px');
+  splitter.setAttribute('aria-valuenow', width);
+  try { localStorage.setItem('dashboard.side', width); } catch { /* storage unavailable */ }
+  fit();
+}
+let resizing = false;
+splitter.addEventListener('pointerdown', (e) => { resizing = true; splitter.setPointerCapture(e.pointerId); splitter.classList.add('active'); e.stopPropagation(); });
+splitter.addEventListener('pointermove', (e) => { if (resizing) setSide(window.innerWidth - e.clientX); });
+splitter.addEventListener('pointerup', () => { resizing = false; splitter.classList.remove('active'); });
+splitter.addEventListener('keydown', (e) => {
+  const now = Number(splitter.getAttribute('aria-valuenow')) || 380;
+  if (e.key === 'ArrowLeft') setSide(now + 24);
+  if (e.key === 'ArrowRight') setSide(now - 24);
+});
+splitter.addEventListener('dblclick', () => setSide(380));
+let saved = 380;
+try { saved = Number(localStorage.getItem('dashboard.side')) || 380; } catch { /* storage unavailable */ }
+setSide(saved);
+
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One JSON object per line, with the correlation ID on every line, so the
+     logs can be shipped to and searched in any log platform. -->
+<Configuration>
+  <Properties>
+    <Property name="jsonLine">{"timestamp":"%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX}","level":"%p","app":"customer-sync-prc-api","correlationId":"%X{correlationId}","logger":"%c{1}","thread":"%enc{%t}{JSON}","message":"%enc{%m}{JSON}","exception":"%enc{%throwable{short}}{JSON}"}%n</Property>
+  </Properties>
+
+  <Appenders>
+    <Console name="console" target="SYSTEM_OUT">
+      <PatternLayout pattern="${jsonLine}" alwaysWriteExceptions="false"/>
+    </Console>
+    <RollingFile name="file"
+                 fileName="${sys:mule.home}${sys:file.separator}logs${sys:file.separator}customer-sync-prc-api.log"
+                 filePattern="${sys:mule.home}${sys:file.separator}logs${sys:file.separator}customer-sync-prc-api-%i.log">
+      <PatternLayout pattern="${jsonLine}" alwaysWriteExceptions="false"/>
+      <SizeBasedTriggeringPolicy size="10 MB"/>
+      <DefaultRolloverStrategy max="10"/>
+    </RollingFile>
+  </Appenders>
+
+  <Loggers>
+    <AsyncLogger name="org.mule.service.http" level="WARN"/>
+    <AsyncLogger name="org.mule.extension.http" level="WARN"/>
+    <AsyncLogger name="org.mule.runtime.core.internal.processor.LoggerMessageProcessor" level="INFO"/>
+    <AsyncRoot level="INFO">
+      <AppenderRef ref="console"/>
+      <AppenderRef ref="file"/>
+    </AsyncRoot>
+  </Loggers>
+</Configuration>

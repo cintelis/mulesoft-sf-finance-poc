@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+  <!-- Flow 1: customer sync. POST /account-events
+       One Account failing never stops the others: each is tried on its own
+       and reported in the response. -->
+  <flow name="post:\account-events:application\json:customer-sync-prc-api-config" doc:name="Account change event">
+    <set-variable variableName="event" value="#[output application/java --- payload]" doc:name="Remember event"/>
+    <set-variable variableName="outcomes" value="#[[]]" doc:name="No outcomes yet"/>
+    <foreach collection="#[vars.event.accountIds default []]" doc:name="Each changed Account">
+      <set-variable variableName="accountId" value="#[payload as String]" doc:name="Account ID"/>
+      <try doc:name="Try this Account">
+        <flow-ref name="sync-one-account" doc:name="Sync one Account"/>
+        <error-handler>
+          <on-error-continue type="ANY" logException="false" doc:name="Record failure">
+            <set-variable variableName="outcomes" doc:name="Add FAILED"
+                          value="#[vars.outcomes ++ [{ accountId: vars.accountId, result: 'FAILED', detail: error.description default 'Unknown error' }]]"/>
+          </on-error-continue>
+        </error-handler>
+      </try>
+    </foreach>
+    <ee:transform doc:name="Build summary">
+      <ee:message>
+        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  processedAt: now() as String {format: "yyyy-MM-dd'T'HH:mm:ssXXX"},
+  eventId: vars.event.eventId,
+  changeType: vars.event.changeType,
+  accounts: sizeOf(vars.outcomes),
+  failed: sizeOf(vars.outcomes filter ((o) -> o.result == 'FAILED')),
+  results: vars.outcomes
+}]]></ee:set-payload>
+      </ee:message>
+    </ee:transform>
+    <set-variable variableName="statusKey" value="accountEvents" doc:name="Status key"/>
+    <flow-ref name="record-status" doc:name="Record run"/>
+    <logger level="INFO" category="customer-sync-prc-api" doc:name="Log event"
+            message="#[output application/java --- 'account event type=' ++ (payload.changeType default '') ++ ' accounts=' ++ (payload.accounts as String) ++ ' failed=' ++ (payload.failed as String)]"/>
+  </flow>
+
+  <sub-flow name="sync-one-account" doc:name="sync-one-account">
+    <choice doc:name="Deleted?">
+      <when expression="#[vars.event.changeType == 'DELETE']">
+        <set-variable variableName="outcomes" doc:name="Add SKIPPED"
+                      value="#[vars.outcomes ++ [{ accountId: vars.accountId, result: 'SKIPPED', detail: 'Deletes are not synced to finance' }]]"/>
+      </when>
+      <otherwise>
+        <!-- The event only carries the fields that changed, so read the full Account. -->
+        <set-variable variableName="req" value="#[{ method: 'GET', path: '/accounts/' ++ vars.accountId }]" doc:name="Read Account"/>
+        <set-variable variableName="reqBody" value="#[null]" doc:name="No body"/>
+        <flow-ref name="call-sfdc" doc:name="Salesforce system API"/>
+        <choice doc:name="Account found?">
+          <when expression="#[vars.res.status == 404]">
+            <set-variable variableName="outcomes" doc:name="Add SKIPPED"
+                          value="#[vars.outcomes ++ [{ accountId: vars.accountId, result: 'SKIPPED', detail: 'Account no longer exists' }]]"/>
+          </when>
+          <when expression="#[vars.res.status >= 400]">
+            <set-variable variableName="outcomes" doc:name="Add FAILED"
+                          value="#[vars.outcomes ++ [{ accountId: vars.accountId, result: 'FAILED', detail: vars.res.body.error.message default 'Salesforce system API error' }]]"/>
+          </when>
+          <otherwise>
+            <set-variable variableName="account" value="#[vars.res.body]" doc:name="Remember Account"/>
+            <!-- A migrated Account carries the finance customer code. Linking first
+                 means the upsert below updates the existing customer instead of
+                 creating a second one. Linking an already linked customer is a no-op. -->
+            <choice doc:name="Has finance code?">
+              <when expression="#[vars.account.financeCustomerCode != null]">
+                <set-variable variableName="req" value="#[{ method: 'PUT', path: '/customer-links/' ++ vars.account.financeCustomerCode }]" doc:name="Link customer"/>
+                <set-variable variableName="reqBody" value="#[output application/json --- { sfAccountId: vars.accountId }]" doc:name="Link body"/>
+                <flow-ref name="call-finance" doc:name="Finance system API"/>
+              </when>
+            </choice>
+            <ee:transform doc:name="Map Account to customer">
+              <ee:variables>
+                <ee:set-variable variableName="reqBody" resource="dw/account-to-customer.dwl"/>
+              </ee:variables>
+            </ee:transform>
+            <set-variable variableName="req" value="#[{ method: 'PUT', path: '/customers/' ++ vars.accountId }]" doc:name="Upsert customer"/>
+            <flow-ref name="call-finance" doc:name="Finance system API"/>
+            <choice doc:name="Accepted?">
+              <when expression="#[vars.res.status >= 400]">
+                <set-variable variableName="outcomes" doc:name="Add REJECTED"
+                              value="#[vars.outcomes ++ [{ accountId: vars.accountId, name: vars.account.name, result: 'REJECTED', detail: vars.res.body.error.message default 'Finance system API error' }]]"/>
+              </when>
+              <otherwise>
+                <set-variable variableName="outcomes" doc:name="Add result"
+                              value="#[vars.outcomes ++ [{ accountId: vars.accountId, name: vars.account.name, result: vars.res.body.action, customerId: vars.res.body.customerId }]]"/>
+              </otherwise>
+            </choice>
+          </otherwise>
+        </choice>
+      </otherwise>
+    </choice>
+  </sub-flow>
+</mule>

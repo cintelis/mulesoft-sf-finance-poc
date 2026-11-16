@@ -46,9 +46,9 @@ fun classify(err) = do {
   var typeMatch = byType[errorType]
   ---
   if (oracleMatch != null)
-    { message: oracleMessage(text) } ++ oracleMatch
+    (oracleMatch - "message") ++ { message: oracleMatch.message default oracleMessage(text) }
   else if (typeMatch != null)
-    { message: err.description default typeMatch.code } ++ typeMatch
+    (typeMatch - "message") ++ { message: typeMatch.message default (err.description default typeMatch.code) }
   else
     fallback
 }
