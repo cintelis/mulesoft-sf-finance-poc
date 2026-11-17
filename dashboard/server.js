@@ -478,6 +478,108 @@ async function loadMappings() {
   })));
 }
 
+// ---------------------------------------------------------------------------
+// Data model: the finance schema read live from Oracle's data dictionary, and
+// how each column maps through the API to Salesforce. The schema query is in
+// schema-query.sql and is read-only.
+// ---------------------------------------------------------------------------
+function loadSchema() {
+  return new Promise((resolve) => {
+    let sql;
+    try { sql = fs.readFileSync(path.join(__dirname, 'schema-query.sql')); } catch { return resolve(null); }
+    const child = spawn('docker', ['exec', '-i', 'finance-db', 'bash', '-c',
+      'sqlplus -s -L "$APP_USER/$APP_USER_PASSWORD"@//localhost/FREEPDB1'], { windowsHide: true });
+    let out = '';
+    const timer = setTimeout(() => child.kill(), 30000);
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => { clearTimeout(timer); resolve(null); });
+    child.on('close', () => {
+      clearTimeout(timer);
+      try {
+        const lines = out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('[') || l.startsWith('{'));
+        const tables = JSON.parse(lines[0]), keys = JSON.parse(lines[1]), counts = JSON.parse(lines[2]);
+        for (const table of tables) {
+          table.rows = counts[table.table];
+          for (const column of table.columns) {
+            const mine = keys.filter((k) => k.table === table.table && k.column === column.name);
+            column.primaryKey = mine.some((k) => k.kind === 'P');
+            column.unique = mine.some((k) => k.kind === 'U');
+            const foreign = mine.find((k) => k.kind === 'R');
+            column.references = foreign ? foreign.references : null;
+          }
+        }
+        resolve({ readAt: new Date().toISOString(), tables });
+      } catch { resolve(null); }
+    });
+    child.stdin.end(sql);
+  });
+}
+
+// One row per field: where it lives in each system and the rule between them.
+// oracle = column, api = field in the system API, sf = Salesforce field.
+const FIELD_MAPS = [
+  { id: 'customers', title: 'Customers and Accounts', oracleTable: 'CUSTOMERS', sfObject: 'Account',
+    flow: 'Salesforce to finance on every Account change. Finance to Salesforce once, in the migration.',
+    left: 'Oracle column', middle: 'API field', right: 'Salesforce field', direction: 'both',
+    rows: [
+      { oracle: 'CUSTOMER_ID', api: 'customerId', sf: null, rule: 'Finance key. Never leaves finance.' },
+      { oracle: 'CUSTOMER_CODE', api: 'customerCode', sf: 'Finance_Customer_Code__c', rule: 'Upsert key for the migration (external ID in Salesforce).', key: true },
+      { oracle: 'SF_ACCOUNT_ID', api: 'sfAccountId', sf: 'Id', rule: 'Upsert key for the live sync. Unique in finance.', key: true },
+      { oracle: 'CUSTOMER_NAME', api: 'name', sf: 'Name', rule: 'Trimmed.' },
+      { oracle: 'ABN', api: 'abn', sf: 'ABN__c', rule: 'Digits only: "51 824 753 556" becomes 51824753556.' },
+      { oracle: 'EMAIL', api: 'email', sf: 'Accounts_Email__c', rule: 'Lower case.' },
+      { oracle: 'PHONE', api: 'phone', sf: 'Phone', rule: 'As is.' },
+      { oracle: 'ADDRESS_LINE', api: 'addressLine', sf: 'BillingStreet', rule: 'As is.' },
+      { oracle: 'SUBURB', api: 'suburb', sf: 'BillingCity', rule: 'As is.' },
+      { oracle: 'STATE_CODE', api: 'state', sf: 'BillingState', rule: 'Lookup: NSW in finance, New South Wales in Salesforce.' },
+      { oracle: 'POSTCODE', api: 'postcode', sf: 'BillingPostalCode', rule: 'Four digits, or finance rejects the record.' },
+      { oracle: 'COUNTRY_CODE', api: 'country', sf: 'BillingCountry', rule: 'AU in finance, Australia in Salesforce.' },
+      { oracle: 'STATUS', api: 'status', sf: 'Account_Status__c', rule: 'Lookup: ON_HOLD in finance, On Hold in Salesforce.' },
+      { oracle: 'CREDIT_LIMIT', api: 'creditLimit', sf: 'Credit_Limit__c', rule: 'Number.' },
+      { oracle: 'LAST_MODIFIED', api: 'lastModified', sf: null, rule: 'Set by a trigger on every update.' },
+    ] },
+  { id: 'invoices', title: 'Invoices', oracleTable: 'INVOICES', sfObject: 'Invoice__c',
+    flow: 'Finance to Salesforce, on a schedule and after each payments file.',
+    left: 'Oracle column', middle: 'API field', right: 'Salesforce field', direction: 'right',
+    rows: [
+      { oracle: 'INVOICE_ID', api: null, sf: null, rule: 'Finance key. Never leaves finance.' },
+      { oracle: 'INVOICE_NUMBER', api: 'invoiceNumber', sf: 'Invoice_Number__c', rule: 'Upsert key (external ID in Salesforce). Also the record name.', key: true },
+      { oracle: 'CUSTOMER_ID', api: 'sfAccountId', sf: 'Account__c', rule: 'Joined to the customer to find its Salesforce Account ID. Left out if the customer is not linked yet.' },
+      { oracle: 'INVOICE_DATE', api: 'invoiceDate', sf: 'Invoice_Date__c', rule: 'Date.' },
+      { oracle: 'DUE_DATE', api: 'dueDate', sf: 'Due_Date__c', rule: 'Date.' },
+      { oracle: 'AMOUNT_EX_GST', api: 'amountExGst', sf: 'Amount_Ex_GST__c', rule: 'Currency.' },
+      { oracle: 'GST_AMOUNT', api: 'gstAmount', sf: 'GST_Amount__c', rule: 'Currency.' },
+      { oracle: 'TOTAL_AMOUNT', api: 'totalAmount', sf: 'Total_Amount__c', rule: 'Calculated in Oracle: ex GST plus GST.' },
+      { oracle: 'AMOUNT_PAID', api: 'amountPaid', sf: 'Amount_Paid__c', rule: 'Updated by apply_payment.' },
+      { oracle: null, api: 'balance', sf: 'Balance__c', rule: 'Not stored or sent. Calculated on each side: total minus paid.' },
+      { oracle: 'CURRENCY_CODE', api: 'currency', sf: null, rule: 'Not sent. The org has one currency.' },
+      { oracle: 'STATUS', api: 'status', sf: 'Status__c', rule: 'Lookup: PART_PAID in finance, Part Paid in Salesforce.' },
+      { oracle: 'DESCRIPTION', api: 'description', sf: 'Description__c', rule: 'As is.' },
+      { oracle: 'LAST_MODIFIED', api: 'lastModified', sf: null, rule: 'Drives the watermark. Set by a trigger on every update.' },
+    ] },
+  { id: 'payments', title: 'Payments file', oracleTable: 'PAYMENTS', sfObject: null,
+    flow: 'Legacy CSV to finance. Salesforce sees the result through the invoice sync.',
+    left: 'CSV column', middle: 'API field', right: 'Oracle column', direction: 'right',
+    rows: [
+      { csv: 'PAYMENT_REF', api: 'paymentRef', oracle: 'PAYMENT_REF', rule: 'Required. Unique in finance, so a repeat is reported as a duplicate.', key: true },
+      { csv: 'INVOICE_NO', api: 'invoiceNumber', oracle: 'INVOICE_ID', rule: 'Looked up by invoice number. Unknown or void invoices are rejected.' },
+      { csv: 'AMOUNT', api: 'amount', oracle: 'AMOUNT', rule: 'Thousands separators removed: "1,375.00" becomes 1375.00. Must be above zero.' },
+      { csv: 'CCY', api: 'currency', oracle: 'CURRENCY_CODE', rule: 'Defaults to AUD.' },
+      { csv: 'PAY_DATE', api: 'paymentDate', oracle: 'PAYMENT_DATE', rule: 'DD/MM/YYYY becomes YYYY-MM-DD.' },
+      { csv: 'METHOD', api: 'method', oracle: 'PAYMENT_METHOD', rule: 'One of EFT, BPAY, CARD, CHEQUE.' },
+      { csv: 'PAYER', api: 'payerName', oracle: 'PAYER_NAME', rule: 'Optional.' },
+      { csv: '(file name)', api: 'sourceFile', oracle: 'SOURCE_FILE', rule: 'Traces a payment back to its file.' },
+      { csv: null, api: null, oracle: 'LOADED_AT', rule: 'Set by Oracle when the row is inserted.' },
+    ] },
+];
+
+const DB_OBJECTS = [
+  { name: 'upsert_customer', kind: 'Procedure', does: 'Inserts or updates a customer, keyed on the Salesforce Account ID. If two events for a new Account race, the loser falls back to an update.' },
+  { name: 'apply_payment', kind: 'Procedure', does: 'Locks the invoice row, records the payment and moves the invoice to part paid or paid. A repeated payment reference is reported as a duplicate.' },
+  { name: 'v_customer_recon', kind: 'View', does: 'One SHA-256 hash per linked customer, over name, ABN, email, postcode and status.' },
+  { name: 'customers_touch_trg, invoices_touch_trg', kind: 'Triggers', does: 'Set last_modified on every update, whoever makes it.' },
+];
+
 function send(res, status, body, type = 'application/json') {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -498,6 +600,12 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && url.pathname === '/') {
       return send(res, 200, fs.readFileSync(path.join(__dirname, 'index.html')), 'text/html; charset=utf-8');
+    }
+    if (req.method === 'GET' && url.pathname === '/data-model') {
+      return send(res, 200, fs.readFileSync(path.join(__dirname, 'data-model.html')), 'text/html; charset=utf-8');
+    }
+    if (req.method === 'GET' && url.pathname === '/api/data-model') {
+      return send(res, 200, { schema: await loadSchema(), maps: FIELD_MAPS, objects: DB_OBJECTS });
     }
     if (req.method === 'GET' && url.pathname === '/walkthrough') {
       return send(res, 200, fs.readFileSync(path.join(__dirname, 'walkthrough.html')), 'text/html; charset=utf-8');

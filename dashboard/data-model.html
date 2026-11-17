@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data model · Integration dashboard</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #18202b; --muted: #5f6b7a; --line: #d8dde5; --accent: #2456c7;
+    --pk: #8a5a00; --pk-bg: #fff4d6; --uk: #1f5fa8; --uk-bg: #e3f0fd; --fk: #7b3fbf; --fk-bg: #f3e8fd;
+    --ora: #fff7e6; --ora-line: #e6c27a; --api: #ecf7f0; --api-line: #9ccbae; --sf: #eaf2fd; --sf-line: #9db9ea; --csv: #f1f2f4; --csv-line: #b9c0ca;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11151b; --panel: #181e27; --ink: #e6eaf0; --muted: #9aa5b4; --line: #2c3542; --accent: #7ea6ff;
+      --pk: #f0c05a; --pk-bg: #3a2f10; --uk: #8fc2ff; --uk-bg: #15273d; --fk: #cfa8ff; --fk-bg: #2a1c40;
+      --ora: #2b2412; --ora-line: #7c6327; --api: #14281d; --api-line: #2f6a48; --sf: #16233a; --sf-line: #35548c; --csv: #1d232c; --csv-line: #45505f; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+  header h1 { font-size: 16px; margin: 0 6px 0 0; font-weight: 650; }
+  nav { display: flex; gap: 4px; }
+  nav a { padding: 5px 11px; border-radius: 6px; color: var(--muted); text-decoration: none; border: 1px solid transparent; }
+  nav a:hover { color: var(--accent); }
+  nav a[aria-current="page"] { color: var(--ink); border-color: var(--line); background: var(--bg); font-weight: 600; }
+  main { max-width: 1320px; margin: 0 auto; padding: 20px 20px 60px; }
+  h2 { font-size: 20px; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 14px; max-width: 100ch; }
+  section + section { margin-top: 34px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+  .tag { display: inline-block; font: 600 10.5px/1.5 ui-monospace, Consolas, monospace; padding: 0 5px; border-radius: 4px; margin-right: 4px; }
+  .tag.pk { color: var(--pk); background: var(--pk-bg); } .tag.uk { color: var(--uk); background: var(--uk-bg); } .tag.fk { color: var(--fk); background: var(--fk-bg); }
+  .tables { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+  .table { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .table h3 { margin: 0; padding: 9px 12px; font: 650 14px ui-monospace, Consolas, monospace; background: var(--ora); border-bottom: 1px solid var(--ora-line); display: flex; justify-content: space-between; gap: 8px; }
+  .table h3 span { font: 400 12.5px system-ui, sans-serif; color: var(--muted); }
+  .table ul { list-style: none; margin: 0; padding: 4px 0; }
+  .table li { display: grid; grid-template-columns: 62px 1fr auto; gap: 6px; padding: 3px 12px; align-items: baseline; }
+  .table li .n { font: 13px ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+  .table li .t { color: var(--muted); font: 12px ui-monospace, Consolas, monospace; white-space: nowrap; }
+  .table li .ref { grid-column: 2 / 4; color: var(--muted); font-size: 12px; margin-top: -2px; }
+  .picker { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+  .picker button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  .picker button:hover { border-color: var(--accent); color: var(--accent); }
+  .picker button[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); font-weight: 600; }
+  .flow { margin: 0 0 12px; }
+  .map { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; overflow-x: auto; }
+  .map table { border-collapse: collapse; width: 100%; min-width: 880px; }
+  .map th { text-align: left; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); padding: 9px 12px; border-bottom: 1px solid var(--line); font-weight: 650; }
+  .map td { padding: 6px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  .map tr:last-child td { border-bottom: 0; }
+  .map tbody tr:hover td { background: var(--bg); }
+  .cell { display: inline-block; font: 13px ui-monospace, Consolas, monospace; padding: 2px 8px; border-radius: 5px; border: 1px solid; overflow-wrap: anywhere; }
+  .cell.oracle { background: var(--ora); border-color: var(--ora-line); } .cell.api { background: var(--api); border-color: var(--api-line); }
+  .cell.sf { background: var(--sf); border-color: var(--sf-line); } .cell.csv { background: var(--csv); border-color: var(--csv-line); }
+  .none { color: var(--muted); font-size: 13px; }
+  td.arrow { width: 34px; padding: 0; text-align: center; color: var(--muted); font-size: 16px; }
+  td.rule { color: var(--ink); }
+  .key td.rule { font-weight: 600; }
+  .type { color: var(--muted); font: 11.5px ui-monospace, Consolas, monospace; margin-left: 6px; white-space: nowrap; }
+  .objects { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+  .object { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; }
+  .object b { font: 650 13.5px ui-monospace, Consolas, monospace; display: block; }
+  .object i { font-style: normal; color: var(--muted); font-size: 12px; }
+  .object p { margin: 4px 0 0; }
+  .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Salesforce to finance integration</h1>
+  <nav aria-label="Dashboard pages">
+    <a href="/">Overview</a>
+    <a href="/mappings">Mappings</a>
+    <a href="/data-model" aria-current="page">Data model</a>
+    <a href="/walkthrough">Walkthrough</a>
+  </nav>
+</header>
+<main>
+  <section>
+    <h2>How the fields map</h2>
+    <p class="lead">Each row is one piece of data, followed across the systems. The middle column is its name in the system API, which is the only name the process API ever sees.</p>
+    <div class="picker" id="picker" role="group" aria-label="Choose what to map"></div>
+    <p class="flow" id="flow"></p>
+    <div class="map" id="map"><p class="note" style="padding:12px">Loading…</p></div>
+  </section>
+
+  <section>
+    <h2>The finance tables</h2>
+    <p class="lead" id="schema-lead">Read from Oracle's data dictionary just now, so this is the schema as it is, not as documented.</p>
+    <div class="legend">
+      <span><span class="tag pk">PK</span>primary key</span>
+      <span><span class="tag uk">UK</span>unique: what makes an interface safe to repeat</span>
+      <span><span class="tag fk">FK</span>foreign key</span>
+    </div>
+    <div class="tables" id="tables"></div>
+  </section>
+
+  <section>
+    <h2>Logic that lives in the database</h2>
+    <p class="lead">The finance rules stay in PL/SQL, where the legacy system keeps them. The integration calls them and maps their errors; it does not copy them.</p>
+    <div class="objects" id="objects"></div>
+  </section>
+</main>
+<script>
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let model = null, current = null;
+
+const cell = (kind, value, type) => (value
+  ? `<span class="cell ${kind}">${esc(value)}</span>${type ? `<span class="type">${esc(type)}</span>` : ''}`
+  : '<span class="none">not held here</span>');
+
+function columnType(table, name) {
+  const t = model.schema && model.schema.tables.find((x) => x.table === table);
+  const c = t && t.columns.find((x) => x.name === name);
+  return c ? c.type : '';
+}
+
+function renderMap() {
+  const m = current, arrow = m.direction === 'both' ? '⇄' : '→';
+  document.getElementById('flow').innerHTML = `<strong>${esc(m.title)}:</strong> ${esc(m.flow)}`;
+  const leftKind = m.id === 'payments' ? 'csv' : 'oracle', rightKind = m.id === 'payments' ? 'oracle' : 'sf';
+  const rows = m.rows.map((r) => {
+    const left = m.id === 'payments' ? cell('csv', r.csv) : cell('oracle', r.oracle, r.oracle ? columnType(m.oracleTable, r.oracle) : '');
+    const right = m.id === 'payments' ? cell('oracle', r.oracle, r.oracle ? columnType(m.oracleTable, r.oracle) : '') : cell('sf', r.sf);
+    const hasLeft = m.id === 'payments' ? r.csv : r.oracle, hasRight = m.id === 'payments' ? r.oracle : r.sf;
+    return `<tr class="${r.key ? 'key' : ''}"><td>${left}</td><td class="arrow" aria-hidden="true">${hasLeft && r.api ? arrow : ''}</td>` +
+      `<td>${cell('api', r.api)}</td><td class="arrow" aria-hidden="true">${r.api && hasRight ? arrow : ''}</td><td>${right}</td><td class="rule">${esc(r.rule)}</td></tr>`;
+  }).join('');
+  document.getElementById('map').innerHTML =
+    `<table><thead><tr><th>${esc(m.left)}${m.id === 'payments' ? '' : ' · ' + esc(m.oracleTable)}</th><th></th><th>${esc(m.middle)}</th><th></th>` +
+    `<th>${esc(m.right)}${m.id === 'payments' ? ' · ' + esc(m.oracleTable) : ' · ' + esc(m.sfObject)}</th><th>Rule</th></tr></thead><tbody>${rows}</tbody></table>`;
+  document.querySelectorAll('#picker button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.id === m.id)));
+}
+
+function renderTables() {
+  const el = document.getElementById('tables');
+  if (!model.schema) {
+    document.getElementById('schema-lead').textContent = 'The database could not be read. Start the Docker systems from the Overview page, then reload.';
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = model.schema.tables.map((t) =>
+    `<div class="table"><h3>${esc(t.table)}<span>${t.rows} row${t.rows === 1 ? '' : 's'}</span></h3><ul>` +
+    t.columns.map((c) => {
+      const tags = (c.primaryKey ? '<span class="tag pk">PK</span>' : '') + (c.unique ? '<span class="tag uk">UK</span>' : '') + (c.references ? '<span class="tag fk">FK</span>' : '');
+      const extra = [c.references ? `references ${c.references}` : '', c.virtual === 'YES' ? 'calculated' : '', c.nullable === 'Y' ? '' : (c.primaryKey ? '' : 'required')].filter(Boolean).join(' · ');
+      return `<li><span>${tags}</span><span class="n">${esc(c.name)}</span><span class="t">${esc(c.type)}</span>${extra ? `<span class="ref">${esc(extra)}</span>` : ''}</li>`;
+    }).join('') + `</ul></div>`).join('');
+}
+
+document.getElementById('picker').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-id]');
+  if (b) { current = model.maps.find((m) => m.id === b.dataset.id); history.replaceState(null, '', '#' + current.id); renderMap(); }
+});
+
+(async () => {
+  try {
+    model = await (await fetch('/api/data-model')).json();
+    document.getElementById('picker').innerHTML = model.maps.map((m) => `<button data-id="${esc(m.id)}">${esc(m.title)}</button>`).join('');
+    current = model.maps.find((m) => m.id === location.hash.slice(1)) || model.maps[0];
+    renderMap(); renderTables();
+    document.getElementById('objects').innerHTML = model.objects.map((o) => `<div class="object"><b>${esc(o.name)}</b><i>${esc(o.kind)}</i><p>${esc(o.does)}</p></div>`).join('');
+  } catch (error) {
+    document.getElementById('map').innerHTML = '<p class="note" style="padding:12px">The data model could not be loaded. Is the dashboard server running?</p>';
+  }
+})();
+</script>
+</body>
+</html>

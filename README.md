@@ -137,6 +137,7 @@ button for each flow.
 ```
 
 - **Mappings** (http://localhost:8090/mappings) shows each DataWeave mapping as sample input, script and output side by side. The input is editable, and the output comes from the real mapping running on the Mule engine.
+- **Data model** (http://localhost:8090/data-model) shows how each field maps from Oracle column to API field to Salesforce field, the finance tables as read live from the database with their keys and row counts, and the logic that lives in PL/SQL.
 - **Walkthrough** (http://localhost:8090/walkthrough) is a ten-minute guided tour of the project in seven stops: where to click, what to say and what you should see.
 - Click a component or a connection line for details, errors and rejected requests.
 - The flow buttons call the process API: migrate customers, sync invoices, reconcile, process a sample payments file.
