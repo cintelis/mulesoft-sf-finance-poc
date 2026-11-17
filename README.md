@@ -4,7 +4,7 @@ A small API-led integration between Salesforce and a legacy finance system,
 built with Mule 4. The finance system is an Oracle database and an SFTP file
 feed, both running in Docker to stand in for on-premises systems.
 
-![API-led architecture](docs/assets/fd38e74b-architecture.drawio.svg)
+![API-led architecture](docs/assets/26f23c05-architecture.drawio.svg)
 
 **[Integration design](docs/architecture.md)**: six diagrams with step-by-step
 explanations of each flow, the data model, the proposed deployment and the field

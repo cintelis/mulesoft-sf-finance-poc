@@ -1,12 +1,12 @@
 title: "Flow 2: invoice sync"
-subtitle: New and changed finance invoices are polled with a watermark and bulk-upserted to Salesforce
+subtitle: New and changed finance invoices are polled with a watermark and upserted to Salesforce
 zones:
   - {id: sf, label: Salesforce, x: 40, y: 230, w: 230, h: 200, colour: blue}
   - {id: mule, label: MuleSoft, x: 310, y: 110, w: 1100, h: 320, colour: green}
   - {id: onprem, label: On-premises, x: 1450, y: 230, w: 230, h: 200, colour: amber}
 nodes:
   - {id: invoice, label: Invoice__c, kind: datastore, sub: external ID, zone: sf, x: 80, y: 290, w: 150, h: 90}
-  - {id: sfdc, label: sfdc-sys-api, kind: service, sub: Bulk API upsert, zone: mule, x: 350, y: 300, w: 190}
+  - {id: sfdc, label: sfdc-sys-api, kind: service, sub: upsert on external ID, zone: mule, x: 350, y: 300, w: 190}
   - {id: sched, label: Scheduler, kind: worker, sub: every 5 minutes, zone: mule, x: 710, y: 160, w: 190}
   - {id: prc, label: customer-sync-prc-api, kind: service, sub: map invoice to Invoice__c, zone: mule, x: 700, y: 300, w: 210}
   - {id: fin, label: finance-sys-api, kind: service, sub: "GET /invoices, /watermarks", zone: mule, x: 1170, y: 300, w: 200}

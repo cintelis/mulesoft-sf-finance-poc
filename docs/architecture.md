@@ -17,7 +17,7 @@ To regenerate the diagrams after changing a spec in `docs/diagrams/`, see
 | `sfdc-sys-api` | Runs against the org; JWT login, upserts and the change listener verified |
 | `payments-file-sys-api` | Runs; a file dropped on the SFTP server was processed, archived and its rejects written |
 | `customer-sync-prc-api` | Runs; all five flows verified |
-| Dashboard (`dashboard/`) | Working |
+| Dashboard (`dashboard/`): overview, mappings and walkthrough pages | Working |
 | MUnit suites | Written for `finance-sys-api`; not yet run |
 | `finance-portal-exp-api` | Optional, not built |
 | CloudHub deployment and CI/CD | Proposed, not built |
@@ -36,7 +36,7 @@ connectivity pattern.
 - **The experience API** (optional) shapes data for one consumer, such as a .NET
   portal.
 
-![API-led architecture](assets/fd38e74b-architecture.drawio.svg)
+![API-led architecture](assets/26f23c05-architecture.drawio.svg)
 
 What every API has in common:
 
@@ -46,14 +46,18 @@ What every API has in common:
   passed to every downstream call, returned on every response and written on
   every log line. One ID traces a record across all the APIs.
 - JSON logs, one object per line.
-- MUnit tests with the backend mocked, plus end-to-end tests against the real backend.
+- A health endpoint that checks the system behind it.
+
+Testing is uneven. `finance-sys-api` has an end-to-end smoke test that passes, and
+MUnit suites that are written but not yet run. The other apps have been verified
+by running their flows against the real systems, and have no automated tests yet.
 
 ## 2. Flow 1: customer sync (Salesforce to finance)
 
 **Trigger:** someone creates or edits an Account in Salesforce.
 **Pattern:** event-driven, using Salesforce Change Data Capture.
 
-![Flow 1: customer sync](assets/916247c4-customer-sync.drawio.svg)
+![Flow 1: customer sync](assets/8d6cb88d-customer-sync.drawio.svg)
 
 1. A user creates or edits an Account.
 2. Salesforce publishes an `AccountChangeEvent`. No polling and no Apex trigger is needed.
@@ -71,24 +75,25 @@ Account ID, which has a unique constraint. Delivering an event twice, or
 replaying a day of events, produces the same rows.
 
 **When it fails:** the process API retries transient failures (finance database
-down, timeout) three times. After that it records the event in
-`integration_errors` with its correlation ID and raises an alert. Bad data (for
-example a state that is not an Australian state) is not retried, because it will
-never succeed.
+down, timeout) three times. After that the Account is reported as failed in the
+run's summary, which is kept in the process API's run history with its correlation
+ID. Bad data (for example a postcode that is not four digits) is not retried,
+because it will never succeed; it is reported as rejected with the reason.
+Alerting on failures is not built.
 
 ## 3. Flow 2: invoice sync (finance to Salesforce)
 
 **Trigger:** a scheduler, every five minutes.
-**Pattern:** polling with a watermark, then a bulk upsert.
+**Pattern:** polling with a watermark, then an upsert on an external ID.
 
-![Flow 2: invoice sync](assets/0383fc9e-invoice-sync.drawio.svg)
+![Flow 2: invoice sync](assets/d57d4cdf-invoice-sync.drawio.svg)
 
 1. The process API reads the watermark: the `last_modified` time of the last
    invoice it synced.
 2. It asks `finance-sys-api` for invoices changed after that time. The page comes
    back oldest change first with a `nextWatermark`.
 3. It maps each invoice to an `Invoice__c` record and sends the batch to `sfdc-sys-api`.
-4. `sfdc-sys-api` bulk-upserts to Salesforce on the external ID field
+4. `sfdc-sys-api` upserts the batch (up to 200 records) to Salesforce on the external ID field
    `Invoice_Number__c`.
 5. Only after Salesforce accepts the batch does the process API move the
    watermark to `nextWatermark`.
@@ -108,7 +113,7 @@ never succeed.
 **Pattern:** batch processing with per-record error handling. This is the legacy
 interface that would be retired once finance can send payments by API.
 
-![Flow 3: nightly payments file](assets/4299a005-payments-file.drawio.svg)
+![Flow 3: nightly payments file](assets/bf581664-payments-file.drawio.svg)
 
 1. The legacy finance batch drops `payments_YYYYMMDD.csv` in `/payments/inbound`.
 2. `payments-file-sys-api` polls the folder and picks the file up once it has stopped growing.
@@ -139,6 +144,9 @@ deliberately bad file, with the expected outcome of every row.
 
 ![Finance database model](assets/545932e1-data-model.drawio.svg)
 
+The `integration_errors` table exists in the schema, but nothing writes to it yet:
+failures are recorded in the process API's run history instead.
+
 The unique keys are what make each interface safe to repeat:
 
 | Key | Makes this idempotent |
@@ -168,6 +176,20 @@ This is a proposal. Nothing here is built yet.
 The simplest demo skips CloudHub and runs all four apps locally. Salesforce
 still works, because every call to it is outbound.
 
+## 7. Seeing it run
+
+A local dashboard shows the whole system on one page. Start it with
+`scripts\start-dashboard.ps1` and open http://localhost:8090.
+
+| Page | What it shows |
+|---|---|
+| Overview | Every component with its health and record counts, the connections between them, recent errors per component and per connection, a run history, a button for each flow, and start, stop and restart controls |
+| Mappings | Each DataWeave mapping as editable sample input, the script and the output, run on the Mule engine |
+| Walkthrough | A ten-minute guided tour in seven stops |
+
+The process API keeps the last 50 runs (`GET /status/history`) and can run any of
+its mappings on sample input without touching a system (`POST /mappings/{name}/preview`).
+
 ## Field mapping
 
 ### Salesforce Account to finance customer
@@ -189,6 +211,21 @@ still works, because every call to it is outbound.
 `ABN__c`, `Accounts_Email__c`, `Account_Status__c` and `Credit_Limit__c` are custom
 fields, deployed from `salesforce/`. `Finance_Customer_Code__c` is the external ID used by
 the historical customer migration. The lookups live in the process API.
+
+### Finance customer to Salesforce Account (migration)
+
+The reverse of the table above, used once to load existing customers.
+
+| Oracle `customers` | Salesforce Account | Rule |
+|---|---|---|
+| `customer_code` | `Finance_Customer_Code__c` | External ID. The upsert key |
+| `customer_name` | `Name` | As is |
+| `state_code` | `BillingState` | Code to full name by lookup: `NSW` becomes `New South Wales`, because the org uses state picklists |
+| `country_code` | `BillingCountry` | `AU` becomes `Australia` |
+| `status` | `Account_Status__c` | `ON_HOLD` becomes `On Hold`, and so on |
+| other fields | matching fields | As is |
+
+After the upsert, each new Account ID is written back to `customers.sf_account_id`.
 
 ### Finance invoice to Salesforce Invoice__c
 

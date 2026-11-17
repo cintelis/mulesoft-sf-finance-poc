@@ -12,7 +12,7 @@ nodes:
   - {id: prc, label: customer-sync-prc-api, kind: service, sub: "map, dedupe, retry", zone: mule, x: 1210, y: 180, w: 210}
   - {id: fin, label: finance-sys-api, kind: service, sub: "PUT /customers/{id}", zone: mule, x: 1500, y: 180, w: 190}
   - {id: oracle, label: Oracle, kind: datastore, sub: customers, zone: onprem, x: 1805, y: 170, w: 150, h: 90}
-  - {id: dlq, label: Failed events, kind: queue, sub: integration_errors + alert, zone: mule, x: 1215, y: 380, w: 200}
+  - {id: dlq, label: Run history, kind: datastore, sub: "every outcome, with reasons", zone: mule, x: 1230, y: 370, w: 170, h: 90}
   - {id: why, label: Why it is safe to replay, kind: note, sub: "The upsert is keyed on the Salesforce ID, so the same event twice gives the same row", x: 1480, y: 360, w: 220, h: 110, zone: mule}
 edges:
   - {from: user, to: account, label: 1 create or edit}
@@ -21,5 +21,5 @@ edges:
   - {from: sfdc, to: prc, label: 4 forward event}
   - {from: prc, to: fin, label: 5 upsert}
   - {from: fin, to: oracle, label: 6 upsert_customer, style: data}
-  - {from: prc, to: dlq, label: after 3 failed tries, style: async}
+  - {from: prc, to: dlq, label: record outcome, style: data}
 legend: true

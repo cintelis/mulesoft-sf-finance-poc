@@ -25,7 +25,7 @@ edges:
   - {from: prc, to: sfdc, label: "upserts down, Account events up", both: true, exit: left, entry: top}
   - {from: prc, to: fin, label: "customers, invoices, payments"}
   - {from: prc, to: pay, label: "files up, results down", both: true, exit: right, entry: top}
-  - {from: sfdc, to: salesforce, label: "REST, Bulk API, CDC", both: true}
+  - {from: sfdc, to: salesforce, label: "Salesforce APIs, CDC", both: true}
   - {from: fin, to: oracle, label: "JDBC: SQL, PL/SQL", style: data}
   - {from: pay, to: sftp, label: SFTP, style: data}
 legend: true

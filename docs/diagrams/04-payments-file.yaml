@@ -10,7 +10,7 @@ nodes:
   - {id: inbound, label: /payments/inbound, kind: datastore, sub: payments_YYYYMMDD.csv, zone: onprem1, x: 325, y: 170, w: 170, h: 90}
   - {id: done, label: /archive and /error, kind: datastore, sub: "processed file, rejects CSV", zone: onprem1, x: 325, y: 390, w: 170, h: 90}
   - {id: pay, label: payments-file-sys-api, kind: service, sub: "list, read, move files", zone: mule, x: 610, y: 180, w: 200}
-  - {id: prc, label: customer-sync-prc-api, kind: worker, sub: "Batch job: validate, map, apply", zone: mule, x: 900, y: 180, w: 230}
+  - {id: prc, label: customer-sync-prc-api, kind: service, sub: "validate, map, apply each row", zone: mule, x: 900, y: 180, w: 230}
   - {id: fin, label: finance-sys-api, kind: service, sub: POST /payments, zone: mule, x: 1220, y: 180, w: 190}
   - {id: sfdc, label: sfdc-sys-api, kind: service, sub: update Invoice__c, zone: mule, x: 1220, y: 400, w: 190}
   - {id: oracle, label: Oracle, kind: datastore, sub: "payments, invoices", zone: onprem2, x: 1530, y: 170, w: 150, h: 90}

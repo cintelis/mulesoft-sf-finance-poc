@@ -542,4 +542,8 @@ const server = http.createServer(async (req, res) => {
 // Local only: the page can trigger writes to the finance database and Salesforce.
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Dashboard: http://localhost:${PORT}`);
+  // Start the slow lookups now, so the first page load already has the
+  // Salesforce links and counts instead of waiting for a later refresh.
+  cached('salesforce', 20000, loadSalesforce);
+  cached('containers', 5000, loadContainers);
 });
