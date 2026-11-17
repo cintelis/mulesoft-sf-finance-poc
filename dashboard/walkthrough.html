@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walkthrough · Integration dashboard</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #18202b; --muted: #5f6b7a; --line: #d8dde5;
+    --up: #1f8a4c; --warn: #b7791f; --accent: #2456c7; --soft: #eef3fc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11151b; --panel: #181e27; --ink: #e6eaf0; --muted: #9aa5b4; --line: #2c3542;
+      --up: #4cc38a; --warn: #e0a84a; --accent: #7ea6ff; --soft: #18233a; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1; }
+  header h1 { font-size: 16px; margin: 0 6px 0 0; font-weight: 650; }
+  nav { display: flex; gap: 4px; }
+  nav a { padding: 5px 11px; border-radius: 6px; color: var(--muted); text-decoration: none; border: 1px solid transparent; font-size: 14px; }
+  nav a:hover { color: var(--accent); }
+  nav a[aria-current="page"] { color: var(--ink); border-color: var(--line); background: var(--bg); font-weight: 600; }
+  a { color: var(--accent); }
+  main { max-width: 860px; margin: 0 auto; padding: 22px 20px 60px; }
+  h2 { font-size: 24px; margin: 0 0 6px; }
+  .lead { color: var(--muted); margin: 0 0 18px; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 0 0 26px; }
+  .fact { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .fact b { display: block; font-size: 13px; color: var(--muted); font-weight: 600; }
+  ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  ol.steps > li { counter-increment: step; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px 14px 62px; margin: 0 0 14px; position: relative; }
+  ol.steps > li::before { content: counter(step); position: absolute; left: 16px; top: 16px; width: 32px; height: 32px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; display: grid; place-items: center; }
+  h3 { font-size: 17px; margin: 0 0 2px; }
+  .time { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  dl { margin: 0; display: grid; grid-template-columns: 74px 1fr; gap: 6px 12px; }
+  dt { color: var(--muted); font-weight: 600; font-size: 13px; padding-top: 2px; }
+  dd { margin: 0; }
+  .say { background: var(--soft); border-left: 3px solid var(--accent); padding: 7px 11px; border-radius: 0 6px 6px 0; }
+  kbd { font: 13px ui-monospace, Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+  code { font: 13px ui-monospace, Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; margin: 8px 0; }
+  section { margin-top: 30px; }
+  section h2 { font-size: 19px; border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 12px; }
+  ul { margin: 0; padding-left: 20px; }
+  li { margin-bottom: 4px; }
+  .note { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Salesforce to finance integration</h1>
+  <nav aria-label="Dashboard pages">
+    <a href="/">Overview</a>
+    <a href="/mappings">Mappings</a>
+    <a href="/walkthrough" aria-current="page">Walkthrough</a>
+  </nav>
+</header>
+<main>
+  <h2>A ten-minute walkthrough</h2>
+  <p class="lead">Seven stops that show the whole project on this dashboard. Each one says where to click, what to point out and what you should see.</p>
+
+  <div class="facts">
+    <div class="fact"><b>What it is</b>Salesforce and a legacy finance system kept in step by MuleSoft.</div>
+    <div class="fact"><b>Three flows</b>Customers to finance, invoices to Salesforce, a nightly payments file.</div>
+    <div class="fact"><b>Four Mule apps</b>Three system APIs and one process API, on one local runtime.</div>
+    <div class="fact"><b>Before you start</b>Every card on the <a href="/">Overview</a> should have a green dot.</div>
+  </div>
+
+  <ol class="steps">
+    <li>
+      <h3>The picture</h3>
+      <p class="time">1 minute · <a href="/">Overview</a></p>
+      <dl>
+        <dt>Do</dt><dd>Point at the three zones left to right: Salesforce, MuleSoft, on-premises finance.</dd>
+        <dt>Say</dt><dd class="say">Salesforce and finance never talk to each other. Each system API wraps one system; the process API in the middle holds the rules. Replace the finance system and only one box changes.</dd>
+        <dt>See</dt><dd>Animated lines where both ends are up, and matching counts on the Invoices and Oracle cards.</dd>
+      </dl>
+    </li>
+    <li>
+      <h3>A change in Salesforce reaches finance</h3>
+      <p class="time">2 minutes · Salesforce, then <a href="/">Overview</a></p>
+      <dl>
+        <dt>Do</dt><dd>Click the <b>Accounts</b> card and open Accounts in Salesforce. Edit any Account, for example its phone number, and save. Come back here.</dd>
+        <dt>Say</dt><dd class="say">Nothing polls. Salesforce publishes a change event, the Salesforce API is subscribed to it, and the process API upserts the customer in finance. The upsert is keyed on the Salesforce ID, so the same event twice changes nothing.</dd>
+        <dt>See</dt><dd>Within a few seconds, a new <b>Account change event</b> entry at the top of Run history, with the result UPDATED.</dd>
+      </dl>
+    </li>
+    <li>
+      <h3>Invoices flow the other way</h3>
+      <p class="time">1 minute · <a href="/">Overview</a></p>
+      <dl>
+        <dt>Do</dt><dd>Click <b>Sync invoices</b>, then click it again.</dd>
+        <dt>Say</dt><dd class="say">The sync reads only invoices changed since a watermark, and moves the watermark only after Salesforce accepts the batch. A failed run re-reads the same rows, and the upsert makes that harmless. It also runs by itself every five minutes.</dd>
+        <dt>See</dt><dd>Two Invoice sync entries reading 0 invoices, because nothing has changed. <b>Full resync</b> sends all 15 again and creates none.</dd>
+      </dl>
+    </li>
+    <li>
+      <h3>A legacy file with bad rows</h3>
+      <p class="time">2 minutes · <a href="/">Overview</a></p>
+      <dl>
+        <dt>Do</dt><dd>Choose <code>payments_20261117_bad.csv</code> in the dropdown and click <b>Drop payments file</b>. Wait about 15 seconds, then click the <b>SFTP server</b> card.</dd>
+        <dt>Say</dt><dd class="say">The file lands on the SFTP server as the old finance system would deliver it. Each row is validated and applied on its own, so one bad row never fails the file. Rejected rows go to a rejects file with a reason.</dd>
+        <dt>See</dt><dd>A Payments file entry in Run history, the file under Archive, and a rejects file listed. On a fresh database: 2 applied, 6 rejected, and the status counts move on both invoice cards. If the file was processed before: every valid row shows as a duplicate, which is the point to make about safe re-runs.</dd>
+      </dl>
+    </li>
+    <li>
+      <h3>The mappings, live</h3>
+      <p class="time">2 minutes · <a href="/mappings">Mappings</a></p>
+      <dl>
+        <dt>Do</dt><dd>Open <b>Payments CSV to finance payments</b>. In the input, change a date to <code>31/02/2026</code> and press <kbd>Ctrl</kbd>+<kbd>Enter</kbd>. Then open <b>Salesforce Account to finance customer</b> and change the state to <code>victoria</code>.</dd>
+        <dt>Say</dt><dd class="say">This is the real DataWeave file running on the Mule engine, not a copy. The lookup tables that translate one system's vocabulary into the other's live in one shared module.</dd>
+        <dt>See</dt><dd>The row turns invalid with a reason. The state becomes VIC.</dd>
+      </dl>
+    </li>
+    <li>
+      <h3>Proving both sides agree</h3>
+      <p class="time">1 minute · <a href="/">Overview</a></p>
+      <dl>
+        <dt>Do</dt><dd>Click <b>Reconcile</b>.</dd>
+        <dt>Say</dt><dd class="say">Each side hashes the synced fields of every customer: Oracle in PL/SQL, Mule in DataWeave. Equal hashes mean the records agree, without comparing them field by field. This is the evidence you want after a migration or before a cutover.</dd>
+        <dt>See</dt><dd>A Reconciliation entry with inSync true and 8 matched.</dd>
+      </dl>
+    </li>
+    <li>
+      <h3>When something breaks</h3>
+      <p class="time">1 minute · <a href="/">Overview</a></p>
+      <dl>
+        <dt>Do</dt><dd>Click <b>finance-sys-api</b>, then its stop icon. Wait a few seconds, click <b>Reconcile</b>, then press the play icon to start the app again.</dd>
+        <dt>Say</dt><dd class="say">The process API retries a failing system API three times, then gives up with a clear error. It does not retry bad data, which would never succeed. Every log line carries a correlation ID, so one ID traces a record across all four apps.</dd>
+        <dt>See</dt><dd>The card turns red and its connections stop moving. The failed run appears with a correlation ID. Click the line between the process API and the finance API to see the error on that connection.</dd>
+      </dl>
+    </li>
+  </ol>
+
+  <section>
+    <h2>Questions you are likely to get</h2>
+    <ul>
+      <li><b>Why four apps for three flows?</b> To show the pattern at a size that can be explained. A real two-system integration this small would not need all of it.</li>
+      <li><b>What stops a payment being applied twice?</b> A unique payment reference in finance. The stored procedure reports a repeat as a duplicate instead of failing.</li>
+      <li><b>What if a file arrives while the process API is down?</b> It stays in the inbound folder and is tried again on the next poll.</li>
+      <li><b>How does Mule log in to Salesforce?</b> It signs a token with a private key, and Salesforce checks it against a certificate on the External Client App. No password is stored.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What is not built</h2>
+    <ul>
+      <li>MUnit tests are written for one app only and have not been run.</li>
+      <li>No CI/CD pipeline, and nothing is deployed to CloudHub.</li>
+      <li>No TLS on the local listeners, no API Manager policies, no alerts.</li>
+      <li>No operational runbook.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Starting and resetting</h2>
+    <p>To start everything on another day, run this from the project folder, then press the play icon in the green MuleSoft zone:</p>
+    <pre>.\scripts\start-dashboard.ps1</pre>
+    <p>To put the finance data back to its starting state, rebuild the database, then click <b>Migrate customers</b> and <b>Full resync</b> here so Salesforce matches it again:</p>
+    <pre>cd infra
+docker compose down -v
+docker compose up -d</pre>
+    <p class="note">The reset removes every payment applied during a demo. The Salesforce Accounts stay; the migration links them to the rebuilt customers by their finance customer code.</p>
+  </section>
+</main>
+</body>
+</html>

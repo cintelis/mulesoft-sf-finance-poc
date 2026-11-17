@@ -499,6 +499,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') {
       return send(res, 200, fs.readFileSync(path.join(__dirname, 'index.html')), 'text/html; charset=utf-8');
     }
+    if (req.method === 'GET' && url.pathname === '/walkthrough') {
+      return send(res, 200, fs.readFileSync(path.join(__dirname, 'walkthrough.html')), 'text/html; charset=utf-8');
+    }
     if (req.method === 'GET' && url.pathname === '/mappings') {
       return send(res, 200, fs.readFileSync(path.join(__dirname, 'mappings.html')), 'text/html; charset=utf-8');
     }
